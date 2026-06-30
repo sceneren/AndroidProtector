@@ -46,6 +46,8 @@
 - 优化加固包体积：当前兼容模式不再重复写入完整加密 DEX payload，VMP 计划文件改为摘要和少量样例。
 - 签名信息编辑支持明文显示已保存的 store/key 密码，并新增 APK 签名方式选择：默认 `V1+V2`，可选 `V1+V2+V3`。
 - 签名信息弹窗改为单列字段顺序：签名文件、Store password、Alias、Key password、签名方式，并隐藏 Store type 和底部别名详情。
+- DEX 加密从 metadata-only 调整为真实加密 payload：输出包移除原始 `classes*.dex`，仅保留 loader dex、加密 payload 和 metadata，loader 启动时解密并安装运行时 DexClassLoader。
+- 修复 DEX 加密包启动问题：loader 内置 AndroidX `CoreComponentFactory` 兼容类，DexClassLoader native 搜索路径补充 APK 内 `lib/<abi>`，运行时 dex 写入后设为只读。
 
 ## 优先级最高的工作
 

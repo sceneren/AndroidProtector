@@ -1,3 +1,4 @@
+use crate::crypto;
 use crate::jobs::{JobCanceled, JobReporter};
 use crate::models::{ArtifactInfo, ArtifactKind, ProtectRequest, SigningConfig, SigningScheme};
 use crate::{channel, loader, manifest, scan, toolchain, vmp};
@@ -5,7 +6,7 @@ use chrono::Utc;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::tempdir;
@@ -85,13 +86,28 @@ pub fn run_protection(
         }
     };
 
-    reporter.stage("dex-encrypt", 0.42, "recording DEX payload metadata")?;
-    let dex_payload = build_dex_payload_metadata(&artifact, &request);
+    let metadata_prefix = metadata_prefix(kind);
+    let payload_file = format!("{metadata_prefix}/dex-payload.bin");
+    reporter.stage("dex-encrypt", 0.42, "encrypting original DEX payload")?;
+    let encrypted_payload = build_encrypted_dex_payload(&input, kind, &artifact, &payload_file)
+        .map_err(|err| ProtectionError::new("dex-encrypt", err))?;
     reporter.log(
         "dex-encrypt",
-        "full encrypted DEX payload skipped until runtime DEX loading is implemented",
+        &format!(
+            "encrypted {} original DEX files into {} bytes",
+            artifact.dex_files.len(),
+            encrypted_payload.metadata.ciphertext_len
+        ),
     );
-    let loader_plan = loader::build_loader_injection_plan(kind, &artifact);
+    let loader_artifact = ArtifactInfo {
+        dex_files: if request.protection_options.dex_encryption {
+            Vec::new()
+        } else {
+            artifact.dex_files.clone()
+        },
+        ..artifact.clone()
+    };
+    let loader_plan = loader::build_loader_injection_plan(kind, &loader_artifact);
     if loader_plan.dex_targets.is_empty() {
         for issue in &loader_plan.issues {
             reporter.log("package", issue);
@@ -161,7 +177,7 @@ pub fn run_protection(
         kind,
         features: ProtectionFeatures {
             vmp: request.vmp_options.enabled,
-            dex_encryption: request.protection_options.dex_encryption,
+            dex_encryption: true,
             anti_debug: request.protection_options.anti_debug,
             signature_tamper_check: request.protection_options.signature_tamper_check,
             legacy_api_fallback: request.protection_options.legacy_api_fallback,
@@ -188,7 +204,6 @@ pub fn run_protection(
         },
     };
 
-    let metadata_prefix = metadata_prefix(kind);
     let metadata_entries = vec![
         (
             format!("{metadata_prefix}/protection-manifest.json"),
@@ -202,9 +217,10 @@ pub fn run_protection(
         ),
         (
             format!("{metadata_prefix}/dex-payload.json"),
-            serde_json::to_vec_pretty(&dex_payload)
+            serde_json::to_vec_pretty(&encrypted_payload.metadata)
                 .map_err(|err| ProtectionError::new("package", err.to_string()))?,
         ),
+        (payload_file, encrypted_payload.ciphertext),
     ];
     rewrite_zip(
         &input,
@@ -213,6 +229,7 @@ pub fn run_protection(
         &metadata_entries,
         &loader_plan.files,
         Some(&manifest_patch),
+        true,
     )?;
 
     reporter.stage("sign", 0.76, "aligning and signing output")?;
@@ -259,28 +276,44 @@ pub fn run_protection(
     Ok(signed_or_unsigned.display().to_string())
 }
 
-fn build_dex_payload_metadata(
+fn build_encrypted_dex_payload(
+    input: &Path,
+    kind: ArtifactKind,
     artifact: &ArtifactInfo,
-    request: &ProtectRequest,
-) -> DexPayloadMetadata {
-    DexPayloadMetadata {
-        mode: "metadata-only".to_string(),
-        requested: request.protection_options.dex_encryption,
-        active: false,
-        reason: "runtime DEX replacement/loading is not implemented in this compatibility build"
-            .to_string(),
-        original_dex_count: artifact.dex_files.len(),
-        original_dex_bytes: artifact
-            .dex_files
-            .iter()
-            .map(|dex| dex.size_bytes)
-            .sum::<u64>(),
-        original_dex_files: artifact
-            .dex_files
-            .iter()
-            .map(|dex| dex.name.clone())
-            .collect(),
+    payload_file: &str,
+) -> Result<crypto::EncryptedBytes, String> {
+    let file = File::open(input).map_err(|err| format!("failed to open artifact: {err}"))?;
+    let mut archive = ZipArchive::new(file).map_err(|err| format!("failed to read zip: {err}"))?;
+    let mut cursor = Cursor::new(Vec::new());
+    {
+        let mut writer = ZipWriter::new(&mut cursor);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        for index in 0..archive.len() {
+            let mut entry = archive
+                .by_index(index)
+                .map_err(|err| format!("failed to read zip entry #{index}: {err}"))?;
+            let name = entry.name().replace('\\', "/");
+            if !scan::is_dex_entry(&name, kind) {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            entry
+                .read_to_end(&mut bytes)
+                .map_err(|err| format!("failed to read dex {name}: {err}"))?;
+            writer
+                .start_file(name, options)
+                .map_err(|err| format!("failed to create dex payload zip: {err}"))?;
+            writer
+                .write_all(&bytes)
+                .map_err(|err| format!("failed to write dex payload zip: {err}"))?;
+        }
+        writer
+            .finish()
+            .map_err(|err| format!("failed to finish dex payload zip: {err}"))?;
     }
+
+    let context = serde_json::to_vec(&artifact.dex_files).unwrap_or_default();
+    crypto::encrypt_bytes(cursor.get_ref(), &context, payload_file)
 }
 
 fn rewrite_zip(
@@ -290,6 +323,7 @@ fn rewrite_zip(
     metadata_entries: &[(String, Vec<u8>)],
     injected_entries: &[loader::LoaderInjectionFile],
     manifest_patch: Option<&manifest::ManifestPatch>,
+    remove_original_dex: bool,
 ) -> Result<(), ProtectionError> {
     let input_file = File::open(input)
         .map_err(|err| ProtectionError::new("package", format!("failed to open input: {err}")))?;
@@ -312,6 +346,7 @@ fn rewrite_zip(
         if scan::is_signature_entry(&name)
             || is_existing_protector_entry(&name, kind)
             || injected_targets.contains(name.as_str())
+            || (remove_original_dex && scan::is_dex_entry(&name, kind))
         {
             continue;
         }
@@ -688,18 +723,6 @@ fn is_existing_protector_entry(name: &str, kind: ArtifactKind) -> bool {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DexPayloadMetadata {
-    mode: String,
-    requested: bool,
-    active: bool,
-    reason: String,
-    original_dex_count: usize,
-    original_dex_bytes: u64,
-    original_dex_files: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct CompactVmpManifest {
     enabled: bool,
     vm_version: String,
@@ -828,44 +851,6 @@ mod tests {
     fn metadata_prefix_matches_artifact_layout() {
         assert_eq!(metadata_prefix(ArtifactKind::Apk), "assets/protector");
         assert_eq!(metadata_prefix(ArtifactKind::Aab), "base/assets/protector");
-    }
-
-    #[test]
-    fn dex_payload_metadata_is_compact() {
-        let artifact = ArtifactInfo {
-            dex_files: vec![
-                crate::models::DexFileInfo {
-                    name: "classes.dex".to_string(),
-                    size_bytes: 10,
-                    ..crate::models::DexFileInfo::default()
-                },
-                crate::models::DexFileInfo {
-                    name: "classes2.dex".to_string(),
-                    size_bytes: 20,
-                    ..crate::models::DexFileInfo::default()
-                },
-            ],
-            ..ArtifactInfo::default()
-        };
-        let request = ProtectRequest {
-            input_path: String::new(),
-            output_dir: String::new(),
-            artifact_kind: Some(ArtifactKind::Apk),
-            vmp_options: crate::models::VmpOptions::default(),
-            protection_options: crate::models::ProtectionOptions::default(),
-            channel_options: crate::models::ChannelOptions::default(),
-            signing_config: None,
-            signing_profile_id: None,
-            toolchain_paths: None,
-        };
-
-        let metadata = build_dex_payload_metadata(&artifact, &request);
-        let json = serde_json::to_string(&metadata).unwrap();
-
-        assert_eq!(metadata.original_dex_count, 2);
-        assert_eq!(metadata.original_dex_bytes, 30);
-        assert!(!metadata.active);
-        assert!(!json.contains("ciphertext"));
     }
 
     #[test]
@@ -1004,6 +989,7 @@ mod tests {
             &[("assets/protector/test.json".to_string(), b"{}".to_vec())],
             &injected,
             None,
+            false,
         )
         .unwrap();
 
@@ -1025,6 +1011,58 @@ mod tests {
         assert_eq!(
             read_zip_entry(&mut archive, "assets/protector/test.json"),
             b"{}".to_vec()
+        );
+    }
+
+    #[test]
+    fn rewrite_zip_can_remove_original_dex_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("input.apk");
+        let output = temp.path().join("output.apk");
+        let loader_dex = temp.path().join("loader.dex");
+        fs::write(&loader_dex, b"loader-dex").unwrap();
+
+        {
+            let file = File::create(&input).unwrap();
+            let mut writer = ZipWriter::new(file);
+            let options =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            writer.start_file("classes.dex", options).unwrap();
+            writer.write_all(b"business-dex").unwrap();
+            writer.start_file("classes2.dex", options).unwrap();
+            writer.write_all(b"business-dex-2").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let injected = vec![loader::LoaderInjectionFile {
+            source: loader::LoaderArtifactSource::File(loader_dex),
+            target: "classes.dex".to_string(),
+            kind: loader::LoaderArtifactKind::Dex,
+        }];
+        rewrite_zip(
+            &input,
+            &output,
+            ArtifactKind::Apk,
+            &[(
+                "assets/protector/dex-payload.bin".to_string(),
+                b"cipher".to_vec(),
+            )],
+            &injected,
+            None,
+            true,
+        )
+        .unwrap();
+
+        let file = File::open(output).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        assert_eq!(
+            read_zip_entry(&mut archive, "classes.dex"),
+            b"loader-dex".to_vec()
+        );
+        assert!(archive.by_name("classes2.dex").is_err());
+        assert_eq!(
+            read_zip_entry(&mut archive, "assets/protector/dex-payload.bin"),
+            b"cipher".to_vec()
         );
     }
 

@@ -324,5 +324,7 @@ mod tests {
         let dex_strings = String::from_utf8_lossy(EMBEDDED_LOADER_DEX);
         assert!(dex_strings.contains("Lcom/protector/runtime/ProtectorApplication;"));
         assert!(dex_strings.contains("Lcom/protector/runtime/ProtectorRuntime;"));
+        assert!(dex_strings.contains("Landroidx/core/app/CoreComponentFactory;"));
+        assert!(dex_strings.contains("Ldalvik/system/DexClassLoader;"));
     }
 }
