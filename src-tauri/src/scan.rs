@@ -1,6 +1,5 @@
-use crate::dex;
 use crate::models::{ArtifactInfo, ArtifactKind, DexFileInfo};
-use regex::Regex;
+use crate::{dex, manifest};
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
@@ -26,7 +25,8 @@ pub fn scan_artifact(path: &Path) -> Result<ArtifactInfo, String> {
     let mut warnings = Vec::new();
     let mut signed = false;
     let mut signature_schemes = BTreeSet::new();
-    let mut manifest_text = None;
+    let mut manifest_info = manifest::ManifestInfo::default();
+    let mut manifest_seen = false;
 
     for index in 0..zip.len() {
         let mut entry = zip
@@ -37,12 +37,16 @@ pub fn scan_artifact(path: &Path) -> Result<ArtifactInfo, String> {
             continue;
         }
 
-        if is_manifest_entry(&name, kind) && manifest_text.is_none() {
+        if is_manifest_entry(&name, kind) && !manifest_seen {
+            manifest_seen = true;
             let mut bytes = Vec::new();
             entry
                 .read_to_end(&mut bytes)
                 .map_err(|err| format!("failed to read manifest: {err}"))?;
-            manifest_text = Some(String::from_utf8_lossy(&bytes).to_string());
+            match manifest::inspect_manifest_bytes(&bytes) {
+                Ok(info) => manifest_info = info,
+                Err(err) => warnings.push(format!("failed to parse manifest: {err}")),
+            }
         } else if is_dex_entry(&name, kind) {
             let size = entry.size();
             let mut bytes = Vec::new();
@@ -97,7 +101,6 @@ pub fn scan_artifact(path: &Path) -> Result<ArtifactInfo, String> {
         );
     }
 
-    let manifest = manifest_text.unwrap_or_default();
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -108,16 +111,12 @@ pub fn scan_artifact(path: &Path) -> Result<ArtifactInfo, String> {
         file_name,
         kind,
         size_bytes: metadata.len(),
-        package_name: capture_manifest_attr(&manifest, "package"),
-        version_name: capture_manifest_attr(&manifest, "android:versionName")
-            .or_else(|| capture_manifest_attr(&manifest, "versionName")),
-        version_code: capture_manifest_attr(&manifest, "android:versionCode")
-            .or_else(|| capture_manifest_attr(&manifest, "versionCode")),
-        application_class: capture_application_name(&manifest),
-        min_sdk: capture_manifest_attr(&manifest, "android:minSdkVersion")
-            .or_else(|| capture_manifest_attr(&manifest, "minSdkVersion")),
-        target_sdk: capture_manifest_attr(&manifest, "android:targetSdkVersion")
-            .or_else(|| capture_manifest_attr(&manifest, "targetSdkVersion")),
+        package_name: manifest_info.package_name,
+        version_name: manifest_info.version_name,
+        version_code: manifest_info.version_code,
+        application_class: manifest_info.application_class,
+        min_sdk: manifest_info.min_sdk,
+        target_sdk: manifest_info.target_sdk,
         dex_files,
         native_abis: native_abis.into_iter().collect(),
         signed,
@@ -179,29 +178,6 @@ fn native_abi_from_entry(name: &str, kind: ArtifactKind) -> Option<String> {
     }
 }
 
-fn capture_manifest_attr(manifest_text: &str, attr: &str) -> Option<String> {
-    if manifest_text.is_empty() {
-        return None;
-    }
-    let pattern = format!(r#"{}\s*=\s*["']([^"']+)["']"#, regex::escape(attr));
-    Regex::new(&pattern)
-        .ok()
-        .and_then(|regex| regex.captures(manifest_text))
-        .and_then(|captures| captures.get(1))
-        .map(|value| value.as_str().to_string())
-}
-
-fn capture_application_name(manifest_text: &str) -> Option<String> {
-    if manifest_text.is_empty() {
-        return None;
-    }
-    Regex::new(r#"<application\b[^>]*(?:android:)?name\s*=\s*["']([^"']+)["']"#)
-        .ok()
-        .and_then(|regex| regex.captures(manifest_text))
-        .and_then(|captures| captures.get(1))
-        .map(|value| value.as_str().to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,10 +210,8 @@ mod tests {
     #[test]
     fn captures_plain_manifest_attributes() {
         let manifest = r#"<manifest package="com.example" android:versionName="1.0"><application android:name=".App" /></manifest>"#;
-        assert_eq!(
-            capture_manifest_attr(manifest, "package").as_deref(),
-            Some("com.example")
-        );
-        assert_eq!(capture_application_name(manifest).as_deref(), Some(".App"));
+        let info = manifest::inspect_manifest_bytes(manifest.as_bytes()).unwrap();
+        assert_eq!(info.package_name.as_deref(), Some("com.example"));
+        assert_eq!(info.application_class.as_deref(), Some(".App"));
     }
 }

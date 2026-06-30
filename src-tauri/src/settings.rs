@@ -1,4 +1,6 @@
-use crate::models::{AppPreferences, SigningConfig, SigningProfile, SigningProfileInput};
+use crate::models::{
+    AppPreferences, SigningConfig, SigningProfile, SigningProfileInput, SigningScheme,
+};
 use crate::signing;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -25,6 +27,7 @@ struct StoredSigningProfile {
     keystore_path: String,
     alias: String,
     store_type: Option<String>,
+    signing_scheme: Option<SigningScheme>,
     store_password: String,
     key_password: Option<String>,
     certificate_summary: Option<String>,
@@ -80,6 +83,7 @@ pub fn save_signing_profile(input: SigningProfileInput) -> Result<AppPreferences
         key_password: input.key_password.clone(),
         alias: input.alias.trim().to_string(),
         store_type: clean_opt(input.store_type.as_deref().unwrap_or_default()),
+        signing_scheme: input.signing_scheme,
     };
     let validation = signing::validate_signing_config(&config);
     if !validation.valid {
@@ -105,6 +109,7 @@ pub fn save_signing_profile(input: SigningProfileInput) -> Result<AppPreferences
         keystore_path: config.keystore_path,
         alias: config.alias,
         store_type: config.store_type,
+        signing_scheme: Some(config.signing_scheme),
         store_password: encode_secret(&input.store_password),
         key_password: input
             .key_password
@@ -162,6 +167,33 @@ pub fn signing_config_for_profile(id: &str) -> Result<Option<SigningConfig>, Str
             .transpose()?,
         alias: profile.alias.clone(),
         store_type: profile.store_type.clone(),
+        signing_scheme: profile.signing_scheme.unwrap_or_default(),
+    }))
+}
+
+pub fn signing_profile_input(id: &str) -> Result<Option<SigningProfileInput>, String> {
+    let stored = load_stored_preferences()?;
+    let Some(profile) = stored
+        .signing_profiles
+        .iter()
+        .find(|profile| profile.id == id)
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(SigningProfileInput {
+        id: Some(profile.id.clone()),
+        name: profile.name.clone(),
+        keystore_path: profile.keystore_path.clone(),
+        store_password: decode_secret(&profile.store_password)?,
+        key_password: profile
+            .key_password
+            .as_ref()
+            .map(|value| decode_secret(value))
+            .transpose()?,
+        alias: profile.alias.clone(),
+        store_type: profile.store_type.clone(),
+        signing_scheme: profile.signing_scheme.unwrap_or_default(),
     }))
 }
 
@@ -194,6 +226,7 @@ fn to_public_profile(profile: &StoredSigningProfile) -> SigningProfile {
         keystore_path: profile.keystore_path.clone(),
         alias: profile.alias.clone(),
         store_type: profile.store_type.clone(),
+        signing_scheme: profile.signing_scheme.unwrap_or_default(),
         certificate_summary: profile.certificate_summary.clone(),
         created_at: profile.created_at.clone(),
         updated_at: profile.updated_at.clone(),

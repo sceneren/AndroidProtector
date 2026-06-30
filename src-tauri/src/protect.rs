@@ -1,11 +1,11 @@
-use crate::crypto;
 use crate::jobs::{JobCanceled, JobReporter};
-use crate::models::{ArtifactInfo, ArtifactKind, ProtectRequest, SigningConfig};
-use crate::{scan, toolchain, vmp};
+use crate::models::{ArtifactInfo, ArtifactKind, ProtectRequest, SigningConfig, SigningScheme};
+use crate::{channel, loader, manifest, scan, toolchain, vmp};
 use chrono::Utc;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::{Cursor, Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::tempdir;
@@ -85,9 +85,56 @@ pub fn run_protection(
         }
     };
 
-    reporter.stage("dex-encrypt", 0.42, "building encrypted DEX/VMP payload")?;
-    let encrypted_payload = build_encrypted_dex_payload(&input, kind, &artifact)
-        .map_err(|err| ProtectionError::new("dex-encrypt", err))?;
+    reporter.stage("dex-encrypt", 0.42, "recording DEX payload metadata")?;
+    let dex_payload = build_dex_payload_metadata(&artifact, &request);
+    reporter.log(
+        "dex-encrypt",
+        "full encrypted DEX payload skipped until runtime DEX loading is implemented",
+    );
+    let loader_plan = loader::build_loader_injection_plan(kind, &artifact);
+    if loader_plan.dex_targets.is_empty() {
+        for issue in &loader_plan.issues {
+            reporter.log("package", issue);
+        }
+        return Err(ProtectionError::new(
+            "package",
+            "loader dex not found; cannot patch AndroidManifest to com.protector.runtime.ProtectorApplication",
+        ));
+    }
+    if loader_plan.native_targets.is_empty() {
+        reporter.log(
+            "package",
+            "native loader artifacts unavailable; Java loader will start in compatibility mode",
+        );
+    } else {
+        reporter.log(
+            "package",
+            &format!(
+                "loader injection planned: {} dex, {} native libraries",
+                loader_plan.dex_targets.len(),
+                loader_plan.native_targets.len()
+            ),
+        );
+    }
+    for issue in &loader_plan.issues {
+        reporter.log("package", issue);
+    }
+    let manifest_patch = manifest::patch_manifest_in_artifact(&input, kind)
+        .map_err(|err| ProtectionError::new("manifest-patch", err))?;
+    reporter.log(
+        "manifest-patch",
+        &format!(
+            "{}; original application: {}",
+            manifest_patch.status,
+            manifest_patch
+                .original_application
+                .as_deref()
+                .unwrap_or("none")
+        ),
+    );
+    for issue in &manifest_patch.issues {
+        reporter.log("manifest-patch", issue);
+    }
 
     reporter.stage(
         "package",
@@ -124,12 +171,20 @@ pub fn run_protection(
             .iter()
             .map(|dex| dex.name.clone())
             .collect(),
+        manifest_patch: ManifestPatchPlan {
+            status: manifest_patch.status.clone(),
+            package_name: manifest_patch.package_name.clone(),
+            original_application: manifest_patch.original_application.clone(),
+            protector_application: manifest_patch.protector_application.clone(),
+            issues: manifest_patch.issues.clone(),
+        },
         native_loader: NativeLoaderPlan {
             java_entrypoint: "com.protector.runtime.ProtectorApplication".to_string(),
             native_library: "protector_vm".to_string(),
-            status:
-                "source-included; binary injection boundary is isolated for loader build artifacts"
-                    .to_string(),
+            status: loader_plan.status(),
+            dex_files: loader_plan.dex_targets.clone(),
+            native_libraries: loader_plan.native_targets.clone(),
+            issues: loader_plan.issues.clone(),
         },
     };
 
@@ -142,16 +197,23 @@ pub fn run_protection(
         ),
         (
             format!("{metadata_prefix}/vmp-plan.json"),
-            serde_json::to_vec_pretty(&vmp_manifest)
+            serde_json::to_vec_pretty(&CompactVmpManifest::from_manifest(&vmp_manifest))
                 .map_err(|err| ProtectionError::new("package", err.to_string()))?,
         ),
         (
             format!("{metadata_prefix}/dex-payload.json"),
-            serde_json::to_vec_pretty(&encrypted_payload)
+            serde_json::to_vec_pretty(&dex_payload)
                 .map_err(|err| ProtectionError::new("package", err.to_string()))?,
         ),
     ];
-    rewrite_zip(&input, &raw_output, kind, &metadata_entries)?;
+    rewrite_zip(
+        &input,
+        &raw_output,
+        kind,
+        &metadata_entries,
+        &loader_plan.files,
+        Some(&manifest_patch),
+    )?;
 
     reporter.stage("sign", 0.76, "aligning and signing output")?;
     let signed_or_unsigned = sign_or_copy_output(
@@ -166,47 +228,59 @@ pub fn run_protection(
     reporter.stage("verify", 0.9, "verifying signed artifact")?;
     verify_output(&signed_or_unsigned, kind, &toolchain, reporter)?;
 
+    if request.channel_options.enabled {
+        reporter.stage("channels", 0.96, "building multi-channel APK packages")?;
+        if kind != ArtifactKind::Apk {
+            return Err(ProtectionError::new(
+                "channels",
+                "multi-channel packaging only supports APK artifacts",
+            ));
+        }
+        let channel_result =
+            channel::write_channel_packages(&signed_or_unsigned, &request.channel_options.channels)
+                .map_err(|err| ProtectionError::new("channels", err))?;
+        reporter.log(
+            "channels",
+            &format!(
+                "created {} channel packages under {}",
+                channel_result.packages.len(),
+                channel_result.output_dir
+            ),
+        );
+        for package in channel_result.packages {
+            reporter.log(
+                "channels",
+                &format!("{} => {}", package.channel, package.path),
+            );
+        }
+    }
+
     reporter.stage("complete", 1.0, "output artifact ready")?;
     Ok(signed_or_unsigned.display().to_string())
 }
 
-fn build_encrypted_dex_payload(
-    input: &Path,
-    kind: ArtifactKind,
+fn build_dex_payload_metadata(
     artifact: &ArtifactInfo,
-) -> Result<crypto::EncryptedPayload, String> {
-    let file = File::open(input).map_err(|err| format!("failed to open artifact: {err}"))?;
-    let mut archive = ZipArchive::new(file).map_err(|err| format!("failed to read zip: {err}"))?;
-    let mut cursor = Cursor::new(Vec::new());
-    {
-        let mut writer = ZipWriter::new(&mut cursor);
-        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-        for index in 0..archive.len() {
-            let mut entry = archive
-                .by_index(index)
-                .map_err(|err| format!("failed to read zip entry #{index}: {err}"))?;
-            let name = entry.name().replace('\\', "/");
-            if !scan::is_dex_entry(&name, kind) {
-                continue;
-            }
-            let mut bytes = Vec::new();
-            entry
-                .read_to_end(&mut bytes)
-                .map_err(|err| format!("failed to read dex {name}: {err}"))?;
-            writer
-                .start_file(name, options)
-                .map_err(|err| format!("failed to create payload zip: {err}"))?;
-            writer
-                .write_all(&bytes)
-                .map_err(|err| format!("failed to write payload zip: {err}"))?;
-        }
-        writer
-            .finish()
-            .map_err(|err| format!("failed to finish payload zip: {err}"))?;
+    request: &ProtectRequest,
+) -> DexPayloadMetadata {
+    DexPayloadMetadata {
+        mode: "metadata-only".to_string(),
+        requested: request.protection_options.dex_encryption,
+        active: false,
+        reason: "runtime DEX replacement/loading is not implemented in this compatibility build"
+            .to_string(),
+        original_dex_count: artifact.dex_files.len(),
+        original_dex_bytes: artifact
+            .dex_files
+            .iter()
+            .map(|dex| dex.size_bytes)
+            .sum::<u64>(),
+        original_dex_files: artifact
+            .dex_files
+            .iter()
+            .map(|dex| dex.name.clone())
+            .collect(),
     }
-
-    let context = serde_json::to_vec(&artifact.dex_files).unwrap_or_default();
-    crypto::encrypt_bytes(cursor.get_ref(), &context)
 }
 
 fn rewrite_zip(
@@ -214,6 +288,8 @@ fn rewrite_zip(
     output: &Path,
     kind: ArtifactKind,
     metadata_entries: &[(String, Vec<u8>)],
+    injected_entries: &[loader::LoaderInjectionFile],
+    manifest_patch: Option<&manifest::ManifestPatch>,
 ) -> Result<(), ProtectionError> {
     let input_file = File::open(input)
         .map_err(|err| ProtectionError::new("package", format!("failed to open input: {err}")))?;
@@ -223,18 +299,42 @@ fn rewrite_zip(
         ProtectionError::new("package", format!("failed to create output: {err}"))
     })?;
     let mut writer = ZipWriter::new(output_file);
+    let injected_targets = injected_entries
+        .iter()
+        .map(|entry| entry.target.as_str())
+        .collect::<HashSet<_>>();
 
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|err| {
             ProtectionError::new("package", format!("failed to read entry #{index}: {err}"))
         })?;
         let name = entry.name().replace('\\', "/");
-        if scan::is_signature_entry(&name) || is_existing_protector_entry(&name, kind) {
+        if scan::is_signature_entry(&name)
+            || is_existing_protector_entry(&name, kind)
+            || injected_targets.contains(name.as_str())
+        {
             continue;
         }
         let options = SimpleFileOptions::default()
             .compression_method(entry.compression())
             .unix_permissions(entry.unix_mode().unwrap_or(0o644));
+        if manifest_patch
+            .as_ref()
+            .is_some_and(|patch| patch.entry_name == name)
+        {
+            writer.start_file(name, options).map_err(|err| {
+                ProtectionError::new("package", format!("failed to add patched manifest: {err}"))
+            })?;
+            writer
+                .write_all(&manifest_patch.expect("checked manifest patch").bytes)
+                .map_err(|err| {
+                    ProtectionError::new(
+                        "package",
+                        format!("failed to write patched manifest: {err}"),
+                    )
+                })?;
+            continue;
+        }
         if entry.is_dir() {
             writer.add_directory(name, options).map_err(|err| {
                 ProtectionError::new("package", format!("failed to add directory: {err}"))
@@ -257,6 +357,40 @@ fn rewrite_zip(
         })?;
         writer.write_all(bytes).map_err(|err| {
             ProtectionError::new("package", format!("failed to write metadata {name}: {err}"))
+        })?;
+    }
+    for entry in injected_entries {
+        let bytes = entry
+            .read_bytes()
+            .map_err(|err| ProtectionError::new("package", err))?;
+        let compression = match entry.kind {
+            loader::LoaderArtifactKind::Dex => CompressionMethod::Deflated,
+            loader::LoaderArtifactKind::NativeLibrary => CompressionMethod::Stored,
+        };
+        let options = SimpleFileOptions::default()
+            .compression_method(compression)
+            .unix_permissions(0o644);
+        writer
+            .start_file(entry.target.as_str(), options)
+            .map_err(|err| {
+                ProtectionError::new(
+                    "package",
+                    format!(
+                        "failed to add loader artifact {} from {}: {err}",
+                        entry.target,
+                        entry.source_label()
+                    ),
+                )
+            })?;
+        writer.write_all(&bytes).map_err(|err| {
+            ProtectionError::new(
+                "package",
+                format!(
+                    "failed to write loader artifact {} from {}: {err}",
+                    entry.target,
+                    entry.source_label()
+                ),
+            )
         })?;
     }
     writer.finish().map_err(|err| {
@@ -379,6 +513,14 @@ fn build_apk_sign_command(
     {
         command.arg("--ks-type").arg(store_type);
     }
+    let enable_v3 = matches!(signing.signing_scheme, SigningScheme::V1V2V3);
+    command
+        .arg("--v1-signing-enabled")
+        .arg("true")
+        .arg("--v2-signing-enabled")
+        .arg("true")
+        .arg("--v3-signing-enabled")
+        .arg(if enable_v3 { "true" } else { "false" });
     command.arg("--out").arg(output).arg(input);
     command
 }
@@ -546,6 +688,46 @@ fn is_existing_protector_entry(name: &str, kind: ArtifactKind) -> bool {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DexPayloadMetadata {
+    mode: String,
+    requested: bool,
+    active: bool,
+    reason: String,
+    original_dex_count: usize,
+    original_dex_bytes: u64,
+    original_dex_files: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompactVmpManifest {
+    enabled: bool,
+    vm_version: String,
+    selected_method_count: usize,
+    skipped_method_count: u32,
+    selected_method_samples: Vec<vmp::VmpMethodEntry>,
+    skipped_reasons: Vec<crate::models::SkipReason>,
+}
+
+impl CompactVmpManifest {
+    fn from_manifest(manifest: &vmp::VmpManifest) -> Self {
+        Self {
+            enabled: manifest.enabled,
+            vm_version: manifest.vm_version.clone(),
+            selected_method_count: manifest.selected_methods.len(),
+            skipped_method_count: manifest
+                .skipped_reasons
+                .iter()
+                .map(|reason| reason.count)
+                .sum(),
+            selected_method_samples: manifest.selected_methods.iter().take(50).cloned().collect(),
+            skipped_reasons: manifest.skipped_reasons.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ProtectionManifest {
     format_version: u32,
     created_at: String,
@@ -553,6 +735,7 @@ struct ProtectionManifest {
     kind: ArtifactKind,
     features: ProtectionFeatures,
     original_dex_files: Vec<String>,
+    manifest_patch: ManifestPatchPlan,
     native_loader: NativeLoaderPlan,
 }
 
@@ -568,10 +751,23 @@ struct ProtectionFeatures {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ManifestPatchPlan {
+    status: String,
+    package_name: Option<String>,
+    original_application: Option<String>,
+    protector_application: String,
+    issues: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct NativeLoaderPlan {
     java_entrypoint: String,
     native_library: String,
     status: String,
+    dex_files: Vec<String>,
+    native_libraries: Vec<String>,
+    issues: Vec<String>,
 }
 
 #[cfg(test)]
@@ -590,6 +786,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
 
     fn command_args(command: &Command) -> Vec<String> {
         command
@@ -611,6 +808,7 @@ mod tests {
             key_password: Some("key-pass".to_string()),
             alias: "release".to_string(),
             store_type: Some("JKS".to_string()),
+            signing_scheme: SigningScheme::V1V2,
         }
     }
 
@@ -630,6 +828,68 @@ mod tests {
     fn metadata_prefix_matches_artifact_layout() {
         assert_eq!(metadata_prefix(ArtifactKind::Apk), "assets/protector");
         assert_eq!(metadata_prefix(ArtifactKind::Aab), "base/assets/protector");
+    }
+
+    #[test]
+    fn dex_payload_metadata_is_compact() {
+        let artifact = ArtifactInfo {
+            dex_files: vec![
+                crate::models::DexFileInfo {
+                    name: "classes.dex".to_string(),
+                    size_bytes: 10,
+                    ..crate::models::DexFileInfo::default()
+                },
+                crate::models::DexFileInfo {
+                    name: "classes2.dex".to_string(),
+                    size_bytes: 20,
+                    ..crate::models::DexFileInfo::default()
+                },
+            ],
+            ..ArtifactInfo::default()
+        };
+        let request = ProtectRequest {
+            input_path: String::new(),
+            output_dir: String::new(),
+            artifact_kind: Some(ArtifactKind::Apk),
+            vmp_options: crate::models::VmpOptions::default(),
+            protection_options: crate::models::ProtectionOptions::default(),
+            channel_options: crate::models::ChannelOptions::default(),
+            signing_config: None,
+            signing_profile_id: None,
+            toolchain_paths: None,
+        };
+
+        let metadata = build_dex_payload_metadata(&artifact, &request);
+        let json = serde_json::to_string(&metadata).unwrap();
+
+        assert_eq!(metadata.original_dex_count, 2);
+        assert_eq!(metadata.original_dex_bytes, 30);
+        assert!(!metadata.active);
+        assert!(!json.contains("ciphertext"));
+    }
+
+    #[test]
+    fn compact_vmp_manifest_caps_selected_method_samples() {
+        let selected_methods = (0..60)
+            .map(|index| vmp::VmpMethodEntry {
+                dex_name: "classes.dex".to_string(),
+                class_descriptor: format!("Lcom/example/C{index};"),
+                method_name: "run".to_string(),
+                access_flags: 0,
+                code_units: 1,
+            })
+            .collect();
+        let manifest = vmp::VmpManifest {
+            enabled: true,
+            vm_version: "test".to_string(),
+            selected_methods,
+            skipped_reasons: Vec::new(),
+        };
+
+        let compact = CompactVmpManifest::from_manifest(&manifest);
+
+        assert_eq!(compact.selected_method_count, 60);
+        assert_eq!(compact.selected_method_samples.len(), 50);
     }
 
     #[test]
@@ -654,8 +914,33 @@ mod tests {
 
         assert!(arg_index(&args, "--key-pass") < input_index);
         assert!(arg_index(&args, "--ks-type") < input_index);
+        assert!(arg_index(&args, "--v1-signing-enabled") < input_index);
+        assert!(arg_index(&args, "--v2-signing-enabled") < input_index);
+        assert!(arg_index(&args, "--v3-signing-enabled") < input_index);
+        assert_eq!(
+            args[arg_index(&args, "--v3-signing-enabled") + 1].as_str(),
+            "false"
+        );
         assert!(arg_index(&args, "--out") < input_index);
         assert_eq!(args.last().map(String::as_str), Some("input.apk"));
+    }
+
+    #[test]
+    fn apk_signing_can_enable_v3() {
+        let mut signing = test_signing_config();
+        signing.signing_scheme = SigningScheme::V1V2V3;
+        let command = build_apk_sign_command(
+            "apksigner",
+            Path::new("input.apk"),
+            Path::new("output.apk"),
+            &signing,
+        );
+        let args = command_args(&command);
+
+        assert_eq!(
+            args[arg_index(&args, "--v3-signing-enabled") + 1].as_str(),
+            "true"
+        );
     }
 
     #[test]
@@ -674,5 +959,79 @@ mod tests {
         assert!(arg_index(&args, "-storetype") < input_index);
         assert!(arg_index(&args, "-signedjar") < input_index);
         assert_eq!(args.last().map(String::as_str), Some("release"));
+    }
+
+    #[test]
+    fn rewrite_zip_injects_loader_artifacts_and_replaces_duplicate_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("input.apk");
+        let output = temp.path().join("output.apk");
+        let loader_dex = temp.path().join("loader.dex");
+        let loader_so = temp.path().join("libprotector_vm.so");
+        fs::write(&loader_dex, b"loader-dex").unwrap();
+        fs::write(&loader_so, b"loader-so").unwrap();
+
+        {
+            let file = File::create(&input).unwrap();
+            let mut writer = ZipWriter::new(file);
+            let options =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            writer.start_file("classes.dex", options).unwrap();
+            writer.write_all(b"app-dex").unwrap();
+            writer.start_file("classes2.dex", options).unwrap();
+            writer.write_all(b"old-loader").unwrap();
+            writer.start_file("META-INF/CERT.RSA", options).unwrap();
+            writer.write_all(b"signature").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let injected = vec![
+            loader::LoaderInjectionFile {
+                source: loader::LoaderArtifactSource::File(loader_dex),
+                target: "classes2.dex".to_string(),
+                kind: loader::LoaderArtifactKind::Dex,
+            },
+            loader::LoaderInjectionFile {
+                source: loader::LoaderArtifactSource::File(loader_so),
+                target: "lib/arm64-v8a/libprotector_vm.so".to_string(),
+                kind: loader::LoaderArtifactKind::NativeLibrary,
+            },
+        ];
+        rewrite_zip(
+            &input,
+            &output,
+            ArtifactKind::Apk,
+            &[("assets/protector/test.json".to_string(), b"{}".to_vec())],
+            &injected,
+            None,
+        )
+        .unwrap();
+
+        let file = File::open(output).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        assert!(archive.by_name("META-INF/CERT.RSA").is_err());
+        assert_eq!(
+            read_zip_entry(&mut archive, "classes.dex"),
+            b"app-dex".to_vec()
+        );
+        assert_eq!(
+            read_zip_entry(&mut archive, "classes2.dex"),
+            b"loader-dex".to_vec()
+        );
+        assert_eq!(
+            read_zip_entry(&mut archive, "lib/arm64-v8a/libprotector_vm.so"),
+            b"loader-so".to_vec()
+        );
+        assert_eq!(
+            read_zip_entry(&mut archive, "assets/protector/test.json"),
+            b"{}".to_vec()
+        );
+    }
+
+    fn read_zip_entry(archive: &mut ZipArchive<File>, name: &str) -> Vec<u8> {
+        let mut entry = archive.by_name(name).unwrap();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        bytes
     }
 }

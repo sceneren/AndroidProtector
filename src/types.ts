@@ -82,12 +82,31 @@ export interface ProtectionOptions {
   legacyApiFallback: boolean;
 }
 
+export interface ChannelOptions {
+  enabled: boolean;
+  channels: string[];
+}
+
+export interface ChannelPackage {
+  channel: string;
+  path: string;
+  value: string;
+}
+
+export interface ChannelPackageResult {
+  outputDir: string;
+  packages: ChannelPackage[];
+}
+
+export type SigningScheme = "v1v2" | "v1v2v3";
+
 export interface SigningConfig {
   keystorePath: string;
   storePassword: string;
   keyPassword?: string | null;
   alias: string;
   storeType?: string | null;
+  signingScheme: SigningScheme;
 }
 
 export interface SigningProfile {
@@ -96,6 +115,7 @@ export interface SigningProfile {
   keystorePath: string;
   alias: string;
   storeType?: string | null;
+  signingScheme: SigningScheme;
   certificateSummary?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -109,6 +129,7 @@ export interface SigningProfileInput {
   keyPassword?: string | null;
   alias: string;
   storeType?: string | null;
+  signingScheme: SigningScheme;
 }
 
 export interface SigningAliasInfo {
@@ -136,6 +157,7 @@ export interface ProtectRequest {
   artifactKind?: ArtifactKind | null;
   vmpOptions: VmpOptions;
   protectionOptions: ProtectionOptions;
+  channelOptions: ChannelOptions;
   signingConfig?: SigningConfig | null;
   signingProfileId?: string | null;
   toolchainPaths?: ToolchainPaths | null;

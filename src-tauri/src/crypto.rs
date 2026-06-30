@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::engine::general_purpose::STANDARD;

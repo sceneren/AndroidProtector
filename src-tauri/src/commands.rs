@@ -3,7 +3,8 @@ use crate::models::{
     AppPreferences, ArtifactInfo, JobStatus, ProtectRequest, SigningAliasInspection, SigningConfig,
     SigningProfileInput, SigningValidation, ToolchainPaths, ToolchainStatus, VmpPlan,
 };
-use crate::{protect, scan, settings, signing, toolchain, vmp};
+use crate::{channel, protect, scan, settings, signing, toolchain, vmp};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
@@ -44,6 +45,11 @@ pub fn load_app_preferences() -> Result<AppPreferences, String> {
 #[tauri::command]
 pub fn save_signing_profile(input: SigningProfileInput) -> Result<AppPreferences, String> {
     settings::save_signing_profile(input)
+}
+
+#[tauri::command]
+pub fn get_signing_profile_input(id: String) -> Result<SigningProfileInput, String> {
+    settings::signing_profile_input(&id)?.ok_or_else(|| format!("signing profile not found: {id}"))
 }
 
 #[tauri::command]
@@ -105,9 +111,36 @@ pub fn cancel_job(state: State<AppState>, job_id: String) -> Result<bool, String
 }
 
 #[tauri::command]
+pub fn package_channels(
+    input_path: String,
+    output_dir: String,
+    channels: Vec<String>,
+) -> Result<channel::ChannelPackageResult, String> {
+    let input = Path::new(input_path.trim());
+    let output_dir = Path::new(output_dir.trim());
+    if input.as_os_str().is_empty() {
+        return Err("source APK path is required".to_string());
+    }
+    if output_dir.as_os_str().is_empty() {
+        return Err("channel output directory is required".to_string());
+    }
+    channel::write_channel_packages_to_dir(input, output_dir, &channels)
+}
+
+#[tauri::command]
 pub fn open_output_dir(path: String) -> Result<(), String> {
     let dir = resolve_open_dir(&path)?;
     open_dir(&dir)
+}
+
+#[tauri::command]
+pub fn save_job_log(state: State<AppState>, job_id: String, path: String) -> Result<(), String> {
+    let status =
+        jobs::get_status(&state, &job_id).ok_or_else(|| format!("job not found: {job_id}"))?;
+    let path = resolve_log_path(&path)?;
+    fs::write(&path, format_job_log(&status))
+        .map_err(|err| format!("failed to save job log: {err}"))?;
+    Ok(())
 }
 
 fn resolve_open_dir(path: &str) -> Result<PathBuf, String> {
@@ -173,6 +206,64 @@ fn open_dir(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn resolve_log_path(path: &str) -> Result<PathBuf, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("log path is required".to_string());
+    }
+
+    let path = PathBuf::from(trimmed);
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        if !parent.exists() {
+            return Err(format!(
+                "log directory does not exist: {}",
+                parent.display()
+            ));
+        }
+        if !parent.is_dir() {
+            return Err(format!(
+                "log parent path is not a directory: {}",
+                parent.display()
+            ));
+        }
+    }
+
+    Ok(path)
+}
+
+fn format_job_log(status: &JobStatus) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!("Job ID: {}", status.id));
+    lines.push(format!("Lifecycle: {:?}", status.lifecycle));
+    lines.push(format!("Stage: {}", status.stage));
+    lines.push(format!("Progress: {}%", (status.progress * 100.0).round()));
+    if let Some(started_at) = status.started_at.as_ref() {
+        lines.push(format!("Started At: {started_at}"));
+    }
+    if let Some(finished_at) = status.finished_at.as_ref() {
+        lines.push(format!("Finished At: {finished_at}"));
+    }
+    if let Some(output_path) = status.output_path.as_ref() {
+        lines.push(format!("Output: {output_path}"));
+    }
+    if let Some(error) = status.error.as_ref() {
+        lines.push(format!("Error: {error}"));
+    }
+    lines.push(String::new());
+    lines.push("Logs:".to_string());
+    for entry in &status.logs {
+        lines.push(format!(
+            "[{}] [{}] {}",
+            entry.timestamp, entry.stage, entry.message
+        ));
+    }
+    lines.push(String::new());
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +288,39 @@ mod tests {
             resolve_open_dir(&file.display().to_string()).unwrap(),
             temp.path()
         );
+    }
+
+    #[test]
+    fn resolves_log_path_when_parent_exists() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("job.log");
+
+        assert_eq!(resolve_log_path(&file.display().to_string()).unwrap(), file);
+    }
+
+    #[test]
+    fn formats_job_log_with_key_fields() {
+        let status = JobStatus {
+            id: "job-1".to_string(),
+            lifecycle: crate::models::JobLifecycle::Failed,
+            stage: "sign".to_string(),
+            progress: 0.76,
+            logs: vec![crate::models::JobLogEntry {
+                timestamp: "2026-06-30T10:00:00Z".to_string(),
+                stage: "sign".to_string(),
+                message: "apksigner failed".to_string(),
+            }],
+            output_path: Some("C:\\out\\app.apk".to_string()),
+            error: Some("[sign] apksigner failed".to_string()),
+            started_at: Some("2026-06-30T09:59:00Z".to_string()),
+            finished_at: Some("2026-06-30T10:00:01Z".to_string()),
+        };
+
+        let log = format_job_log(&status);
+
+        assert!(log.contains("Job ID: job-1"));
+        assert!(log.contains("Lifecycle: Failed"));
+        assert!(log.contains("Output: C:\\out\\app.apk"));
+        assert!(log.contains("[sign] apksigner failed"));
     }
 }

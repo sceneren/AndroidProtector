@@ -4,11 +4,18 @@ import android.app.Application;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.os.Build;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 public final class ProtectorRuntime {
     private static final String ORIGINAL_APPLICATION_KEY = "protector.original_application";
     private static volatile boolean initialized;
+    private static volatile boolean nativeReady;
 
     private ProtectorRuntime() {}
 
@@ -16,8 +23,13 @@ public final class ProtectorRuntime {
         if (initialized) {
             return;
         }
-        System.loadLibrary("protector_vm");
-        nativeInit(context.getPackageName(), context.getApplicationInfo().sourceDir, Build.VERSION.SDK_INT);
+        try {
+            System.loadLibrary("protector_vm");
+            nativeInit(context.getPackageName(), context.getApplicationInfo().sourceDir, Build.VERSION.SDK_INT);
+            nativeReady = true;
+        } catch (UnsatisfiedLinkError error) {
+            nativeReady = false;
+        }
         initialized = true;
     }
 
@@ -46,19 +58,47 @@ public final class ProtectorRuntime {
     }
 
     public static Object invokeVm(int methodId, Object receiver, Object[] args) {
+        if (!nativeReady) {
+            throw new IllegalStateException("Protector native VM is unavailable");
+        }
         return nativeInvoke(methodId, receiver, args);
     }
 
     private static String readOriginalApplicationName(Context context) {
         ApplicationInfo info = context.getApplicationInfo();
-        if (info.metaData == null) {
+        if (info.metaData != null) {
+            String configured = info.metaData.getString(ORIGINAL_APPLICATION_KEY);
+            if (configured != null && !configured.isEmpty()) {
+                return configured;
+            }
+        }
+        return readOriginalApplicationNameFromAssets(context);
+    }
+
+    private static String readOriginalApplicationNameFromAssets(Context context) {
+        try (InputStream input = context.getAssets().open("protector/protection-manifest.json")) {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[4096];
+            while (true) {
+                int read = input.read(buffer);
+                if (read < 0) {
+                    break;
+                }
+                output.write(buffer, 0, read);
+            }
+            JSONObject manifest = new JSONObject(output.toString(StandardCharsets.UTF_8.name()));
+            JSONObject patch = manifest.optJSONObject("manifestPatch");
+            if (patch == null) {
+                return null;
+            }
+            String className = patch.optString("originalApplication", null);
+            return className == null || className.isEmpty() ? null : className;
+        } catch (IOException | JSONException | RuntimeException ignored) {
             return null;
         }
-        return info.metaData.getString(ORIGINAL_APPLICATION_KEY);
     }
 
     private static native void nativeInit(String packageName, String sourceDir, int sdkInt);
 
     private static native Object nativeInvoke(int methodId, Object receiver, Object[] args);
 }
-

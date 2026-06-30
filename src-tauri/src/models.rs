@@ -142,12 +142,35 @@ impl Default for ProtectionOptions {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct ChannelOptions {
+    pub enabled: bool,
+    pub channels: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SigningScheme {
+    #[serde(rename = "v1v2")]
+    V1V2,
+    #[serde(rename = "v1v2v3")]
+    V1V2V3,
+}
+
+impl Default for SigningScheme {
+    fn default() -> Self {
+        Self::V1V2
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct SigningConfig {
     pub keystore_path: String,
     pub store_password: String,
     pub key_password: Option<String>,
     pub alias: String,
     pub store_type: Option<String>,
+    #[serde(default)]
+    pub signing_scheme: SigningScheme,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -158,6 +181,8 @@ pub struct SigningProfile {
     pub keystore_path: String,
     pub alias: String,
     pub store_type: Option<String>,
+    #[serde(default)]
+    pub signing_scheme: SigningScheme,
     pub certificate_summary: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -173,6 +198,8 @@ pub struct SigningProfileInput {
     pub key_password: Option<String>,
     pub alias: String,
     pub store_type: Option<String>,
+    #[serde(default)]
+    pub signing_scheme: SigningScheme,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -210,6 +237,8 @@ pub struct ProtectRequest {
     pub vmp_options: VmpOptions,
     #[serde(default)]
     pub protection_options: ProtectionOptions,
+    #[serde(default)]
+    pub channel_options: ChannelOptions,
     pub signing_config: Option<SigningConfig>,
     pub signing_profile_id: Option<String>,
     pub toolchain_paths: Option<ToolchainPaths>,
