@@ -45,6 +45,7 @@
 - loader runtime 对 native so 缺失启用兼容降级，避免当前骨架阶段因 `System.loadLibrary` 失败直接崩溃。
 - 优化加固包体积：当前兼容模式不再重复写入完整加密 DEX payload，VMP 计划文件改为摘要和少量样例。
 - 签名信息编辑支持明文显示已保存的 store/key 密码，并新增 APK 签名方式选择：默认 `V1+V2`，可选 `V1+V2+V3`。
+- 签名信息弹窗改为单列字段顺序：签名文件、Store password、Alias、Key password、签名方式，并隐藏 Store type 和底部别名详情。
 
 ## 优先级最高的工作
 

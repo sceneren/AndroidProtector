@@ -683,6 +683,7 @@ select:focus {
 
 .modal-rule-grid {
   align-items: end;
+  grid-template-columns: 1fr;
 }
 
 .alias-list {

@@ -895,14 +895,6 @@ function SigningProfileModal({
               <input type="text" value={draft.storePassword} onChange={(event) => onDraftChange({ ...draft, storePassword: event.target.value, alias: "" })} />
             </label>
             <label>
-              Key password
-              <input type="text" value={draft.keyPassword ?? ""} onChange={(event) => onDraftChange({ ...draft, keyPassword: event.target.value })} />
-            </label>
-            <label>
-              Store type
-              <input value={draft.storeType || aliasInspection?.storeType || "自动识别"} readOnly />
-            </label>
-            <label>
               Alias
               <select value={draft.alias} onChange={(event) => onDraftChange({ ...draft, alias: event.target.value })} disabled={aliases.length === 0}>
                 <option value="">请选择别名</option>
@@ -914,6 +906,10 @@ function SigningProfileModal({
               </select>
             </label>
             <label>
+              Key password
+              <input type="text" value={draft.keyPassword ?? ""} onChange={(event) => onDraftChange({ ...draft, keyPassword: event.target.value })} />
+            </label>
+            <label>
               签名方式
               <select value={draft.signingScheme ?? "v1v2"} onChange={(event) => onDraftChange({ ...draft, signingScheme: event.target.value as SigningProfileInput["signingScheme"] })}>
                 <option value="v1v2">V1 + V2</option>
@@ -921,16 +917,6 @@ function SigningProfileModal({
               </select>
             </label>
           </div>
-          {aliases.length > 0 && (
-            <div className="alias-list">
-              {aliases.map((item) => (
-                <div key={item.alias}>
-                  <strong>{item.alias}</strong>
-                  <span>{item.entryType ?? "entry"}</span>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
 
         <footer className="modal-actions">
