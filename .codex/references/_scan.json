@@ -1,0 +1,468 @@
+{
+  "project_root": "C:\\Users\\Administrator\\Documents\\Android加固工具",
+  "project_type": {
+    "platform": "Node",
+    "build": "npm/yarn"
+  },
+  "scan_time": "2026-06-30 09:44:27",
+  "module_count": 3,
+  "modules": [
+    {
+      "name": "frontend",
+      "path": ".",
+      "is_aar": false,
+      "is_application": false,
+      "has_source": true,
+      "source_dirs": [
+        {
+          "root": "src",
+          "file_count": 3,
+          "file_list": [
+            "App.tsx",
+            "main.tsx",
+            "types.ts"
+          ],
+          "top_packages": []
+        }
+      ],
+      "file_count": 3,
+      "file_list": [
+        "App.tsx",
+        "main.tsx",
+        "types.ts"
+      ],
+      "resource_dirs": [],
+      "asset_files": [],
+      "tree": "src/\n├── App.tsx\n├── main.tsx\n└── types.ts",
+      "dependencies": [
+        {
+          "name": "@tauri-apps/api",
+          "version": "^2.2.0",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "@tauri-apps/plugin-dialog",
+          "version": "^2.2.0",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "lucide-react",
+          "version": "^0.468.0",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "react",
+          "version": "^18.3.1",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "react-dom",
+          "version": "^18.3.1",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "@tauri-apps/cli",
+          "version": "^2.2.0",
+          "type": "devDependencies",
+          "external": true
+        },
+        {
+          "name": "@types/react",
+          "version": "^18.3.17",
+          "type": "devDependencies",
+          "external": true
+        },
+        {
+          "name": "@types/react-dom",
+          "version": "^18.3.5",
+          "type": "devDependencies",
+          "external": true
+        },
+        {
+          "name": "@vitejs/plugin-react",
+          "version": "^4.3.4",
+          "type": "devDependencies",
+          "external": true
+        },
+        {
+          "name": "typescript",
+          "version": "^5.7.2",
+          "type": "devDependencies",
+          "external": true
+        },
+        {
+          "name": "vite",
+          "version": "^6.0.5",
+          "type": "devDependencies",
+          "external": true
+        }
+      ],
+      "build_config": {
+        "dependencies": [
+          {
+            "name": "@tauri-apps/api",
+            "version": "^2.2.0",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "@tauri-apps/plugin-dialog",
+            "version": "^2.2.0",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "lucide-react",
+            "version": "^0.468.0",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "react",
+            "version": "^18.3.1",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "react-dom",
+            "version": "^18.3.1",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "@tauri-apps/cli",
+            "version": "^2.2.0",
+            "type": "devDependencies",
+            "external": true
+          },
+          {
+            "name": "@types/react",
+            "version": "^18.3.17",
+            "type": "devDependencies",
+            "external": true
+          },
+          {
+            "name": "@types/react-dom",
+            "version": "^18.3.5",
+            "type": "devDependencies",
+            "external": true
+          },
+          {
+            "name": "@vitejs/plugin-react",
+            "version": "^4.3.4",
+            "type": "devDependencies",
+            "external": true
+          },
+          {
+            "name": "typescript",
+            "version": "^5.7.2",
+            "type": "devDependencies",
+            "external": true
+          },
+          {
+            "name": "vite",
+            "version": "^6.0.5",
+            "type": "devDependencies",
+            "external": true
+          }
+        ],
+        "plugin_type": "library"
+      }
+    },
+    {
+      "name": "tauri-core",
+      "path": "src-tauri",
+      "is_aar": false,
+      "is_application": false,
+      "has_source": true,
+      "source_dirs": [
+        {
+          "root": "src-tauri\\src",
+          "file_count": 13,
+          "file_list": [
+            "commands.rs",
+            "crypto.rs",
+            "dex.rs",
+            "jobs.rs",
+            "lib.rs",
+            "main.rs",
+            "models.rs",
+            "protect.rs",
+            "scan.rs",
+            "settings.rs",
+            "signing.rs",
+            "toolchain.rs",
+            "vmp.rs"
+          ],
+          "top_packages": []
+        }
+      ],
+      "file_count": 13,
+      "file_list": [
+        "commands.rs",
+        "crypto.rs",
+        "dex.rs",
+        "jobs.rs",
+        "lib.rs",
+        "main.rs",
+        "models.rs",
+        "protect.rs",
+        "scan.rs",
+        "settings.rs",
+        "signing.rs",
+        "toolchain.rs",
+        "vmp.rs"
+      ],
+      "resource_dirs": [],
+      "asset_files": [],
+      "tree": "src-tauri\\src/\n├── commands.rs\n├── crypto.rs\n├── dex.rs\n├── jobs.rs\n├── lib.rs\n├── main.rs\n├── models.rs\n├── protect.rs\n├── scan.rs\n├── settings.rs\n├── signing.rs\n├── toolchain.rs\n└── vmp.rs",
+      "dependencies": [
+        {
+          "name": "tauri-build",
+          "version": "2.0.4",
+          "type": "build-dependencies",
+          "external": true
+        },
+        {
+          "name": "aes-gcm",
+          "version": "0.10.3",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "base64",
+          "version": "0.22.1",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "chrono",
+          "version": "0.4.39",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "rand",
+          "version": "0.8.5",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "regex",
+          "version": "1.11.1",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "serde",
+          "version": "1.0.217",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "serde_json",
+          "version": "1.0.135",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "sha2",
+          "version": "0.10.8",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "tauri",
+          "version": "2.2.4",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "tauri-plugin-dialog",
+          "version": "2.2.0",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "tempfile",
+          "version": "3.15.0",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "thiserror",
+          "version": "2.0.9",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "uuid",
+          "version": "1.11.0",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "walkdir",
+          "version": "2.5.0",
+          "type": "dependencies",
+          "external": true
+        },
+        {
+          "name": "zip",
+          "version": "2.2.2",
+          "type": "dependencies",
+          "external": true
+        }
+      ],
+      "build_config": {
+        "dependencies": [
+          {
+            "name": "tauri-build",
+            "version": "2.0.4",
+            "type": "build-dependencies",
+            "external": true
+          },
+          {
+            "name": "aes-gcm",
+            "version": "0.10.3",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "base64",
+            "version": "0.22.1",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "chrono",
+            "version": "0.4.39",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "rand",
+            "version": "0.8.5",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "regex",
+            "version": "1.11.1",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "serde",
+            "version": "1.0.217",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "serde_json",
+            "version": "1.0.135",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "sha2",
+            "version": "0.10.8",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "tauri",
+            "version": "2.2.4",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "tauri-plugin-dialog",
+            "version": "2.2.0",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "tempfile",
+            "version": "3.15.0",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "thiserror",
+            "version": "2.0.9",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "uuid",
+            "version": "1.11.0",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "walkdir",
+            "version": "2.5.0",
+            "type": "dependencies",
+            "external": true
+          },
+          {
+            "name": "zip",
+            "version": "2.2.2",
+            "type": "dependencies",
+            "external": true
+          }
+        ],
+        "plugin_type": "library"
+      }
+    },
+    {
+      "name": "android-loader",
+      "path": "loader-android\\protector-loader",
+      "is_aar": false,
+      "is_application": false,
+      "has_source": true,
+      "source_dirs": [
+        {
+          "root": "loader-android\\protector-loader\\src\\main\\java",
+          "file_count": 2,
+          "file_list": [
+            "com\\protector\\runtime\\ProtectorApplication.java",
+            "com\\protector\\runtime\\ProtectorRuntime.java"
+          ],
+          "top_packages": [
+            "com.protector.runtime"
+          ]
+        },
+        {
+          "root": "loader-android\\protector-loader\\src\\main\\cpp",
+          "file_count": 1,
+          "file_list": [
+            "protector_vm.cpp"
+          ],
+          "top_packages": []
+        }
+      ],
+      "file_count": 3,
+      "file_list": [
+        "com\\protector\\runtime\\ProtectorApplication.java",
+        "com\\protector\\runtime\\ProtectorRuntime.java",
+        "protector_vm.cpp"
+      ],
+      "resource_dirs": [],
+      "asset_files": [],
+      "tree": "loader-android\\protector-loader\\src\\main\\java/\n└── com/  (2个文件)\n    └── protector/  (2个文件)\n        └── runtime/  (2个文件)\n            ├── ProtectorApplication.java\n            └── ProtectorRuntime.java\nloader-android\\protector-loader\\src\\main\\cpp/\n└── protector_vm.cpp",
+      "dependencies": [],
+      "build_config": {
+        "dependencies": [],
+        "plugin_type": "library",
+        "view_binding": false
+      }
+    }
+  ]
+}
