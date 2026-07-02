@@ -151,6 +151,8 @@ pub struct ChannelOptions {
 pub enum SigningScheme {
     #[serde(rename = "v1v2")]
     V1V2,
+    #[serde(rename = "v2v3")]
+    V2V3,
     #[serde(rename = "v1v2v3")]
     V1V2V3,
 }

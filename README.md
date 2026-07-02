@@ -1,4 +1,4 @@
-# Android APK/AAB 第三代加固工具
+# Android APK/AAB 加固工具
 
 跨平台桌面工具，使用 Tauri + Rust + React/TypeScript 实现，目标支持 Windows 和 macOS。
 

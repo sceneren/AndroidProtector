@@ -21,13 +21,16 @@ tools/
       arm64-v8a/libprotector_vm.so
       armeabi-v7a/libprotector_vm.so
       x86_64/libprotector_vm.so
+      x86/libprotector_vm.so
 ```
 
 For development on this machine, the app also auto-detects `ANDROID_HOME`, `ANDROID_SDK_ROOT`, and `JAVA_HOME`.
 
 The Java loader dex is required because the protection pipeline patches `AndroidManifest.xml` to `com.protector.runtime.ProtectorApplication`.
 The desktop backend also embeds `tools/loader/classes.dex` at build time as a fallback, so release builds can still inject the Java loader when external resources are not next to the executable.
-Native libraries are optional in the current compatibility build; when present, they are injected into the matching APK/AAB `lib` path.
+Native loader libraries are provided for `arm64-v8a`, `armeabi-v7a`, `x86_64`, and `x86`.
+The desktop backend also embeds these `libprotector_vm.so` files at build time. If the input APK/AAB already contains business native libraries, the protector only injects loader libraries for matching input ABIs; if the input has no native libraries, all built-in loader ABIs remain available.
+DEX payload metadata stores only a wrapped payload key and public nonce/salt values; the wrapping key is derived inside the native loader.
 
 To prepare loader artifacts from the Android loader project:
 

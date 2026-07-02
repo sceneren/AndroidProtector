@@ -37,14 +37,14 @@ public final class ProtectorRuntime {
         if (initialized) {
             return;
         }
-        installEncryptedDexPayload(context);
         try {
             System.loadLibrary("protector_vm");
-            nativeInit(context.getPackageName(), context.getApplicationInfo().sourceDir, Build.VERSION.SDK_INT);
             nativeReady = true;
+            nativeInit(context.getPackageName(), context.getApplicationInfo().sourceDir, Build.VERSION.SDK_INT);
         } catch (UnsatisfiedLinkError error) {
             nativeReady = false;
         }
+        installEncryptedDexPayload(context);
         initialized = true;
     }
 
@@ -90,8 +90,8 @@ public final class ProtectorRuntime {
             byte[] ciphertext = readAsset(context, payloadAsset);
             byte[] plaintext = decryptPayload(
                     ciphertext,
-                    metadata.optString("keyB64", ""),
-                    metadata.optString("nonceB64", ""));
+                    metadata,
+                    context.getPackageName());
             String expectedSha = metadata.optString("plaintextSha256B64", "");
             if (!expectedSha.isEmpty() && !expectedSha.equals(sha256B64(plaintext))) {
                 throw new IllegalStateException("Protector DEX payload checksum mismatch");
@@ -164,16 +164,37 @@ public final class ProtectorRuntime {
         }
     }
 
-    private static byte[] decryptPayload(byte[] ciphertext, String keyB64, String nonceB64) {
+    private static byte[] decryptPayload(byte[] ciphertext, JSONObject metadata, String packageName) {
         try {
-            byte[] key = Base64.decode(keyB64, Base64.DEFAULT);
-            byte[] nonce = Base64.decode(nonceB64, Base64.DEFAULT);
+            byte[] payloadKey = unwrapPayloadKey(metadata, packageName);
+            byte[] nonce = Base64.decode(metadata.optString("payloadNonceB64", ""), Base64.DEFAULT);
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), new GCMParameterSpec(128, nonce));
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(payloadKey, "AES"), new GCMParameterSpec(128, nonce));
             return cipher.doFinal(ciphertext);
         } catch (Exception error) {
             throw new IllegalStateException("Failed to decrypt DEX payload", error);
         }
+    }
+
+    private static byte[] unwrapPayloadKey(JSONObject metadata, String packageName) throws Exception {
+        byte[] salt = Base64.decode(metadata.optString("kdfSaltB64", ""), Base64.DEFAULT);
+        byte[] wrapNonce = Base64.decode(metadata.optString("keyWrapNonceB64", ""), Base64.DEFAULT);
+        byte[] wrappedKey = Base64.decode(metadata.optString("wrappedKeyB64", ""), Base64.DEFAULT);
+        byte[] wrapKey = deriveWrapKey(packageName, salt);
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(wrapKey, "AES"), new GCMParameterSpec(128, wrapNonce));
+        return cipher.doFinal(wrappedKey);
+    }
+
+    private static byte[] deriveWrapKey(String packageName, byte[] salt) {
+        if (!nativeReady) {
+            throw new IllegalStateException("Protector native key derivation is unavailable");
+        }
+        byte[] key = nativeDeriveWrapKey(packageName, salt);
+        if (key == null || key.length != 32) {
+            throw new IllegalStateException("Protector native key derivation returned invalid key");
+        }
+        return key;
     }
 
     private static String sha256B64(byte[] bytes) {
@@ -274,6 +295,8 @@ public final class ProtectorRuntime {
     }
 
     private static native void nativeInit(String packageName, String sourceDir, int sdkInt);
+
+    private static native byte[] nativeDeriveWrapKey(String packageName, byte[] salt);
 
     private static native Object nativeInvoke(int methodId, Object receiver, Object[] args);
 }

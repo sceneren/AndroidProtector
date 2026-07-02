@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Android 第三代加固工具",
+  "productName": "Android 加固工具",
   "version": "0.1.0",
-  "identifier": "com.codex.android-thirdgen-protector",
+  "identifier": "com.codex.android-protector",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://127.0.0.1:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Android 第三代加固工具",
+        "title": "Android 加固工具",
         "width": 1280,
         "height": 860,
         "minWidth": 720,

@@ -9,6 +9,24 @@ const LOADER_DEX_NAMES: &[&str] = &["classes.dex", "protector-loader.dex", "load
 const NATIVE_LIBRARY_NAME: &str = "libprotector_vm.so";
 const KNOWN_ABIS: &[&str] = &["arm64-v8a", "armeabi-v7a", "x86_64", "x86"];
 const EMBEDDED_LOADER_DEX: &[u8] = include_bytes!("../../tools/loader/classes.dex");
+const EMBEDDED_NATIVE_LIBS: &[(&str, &[u8])] = &[
+    (
+        "arm64-v8a",
+        include_bytes!("../../tools/loader/lib/arm64-v8a/libprotector_vm.so"),
+    ),
+    (
+        "armeabi-v7a",
+        include_bytes!("../../tools/loader/lib/armeabi-v7a/libprotector_vm.so"),
+    ),
+    (
+        "x86_64",
+        include_bytes!("../../tools/loader/lib/x86_64/libprotector_vm.so"),
+    ),
+    (
+        "x86",
+        include_bytes!("../../tools/loader/lib/x86/libprotector_vm.so"),
+    ),
+];
 
 #[derive(Debug, Clone, Default)]
 pub struct LoaderInjectionPlan {
@@ -76,6 +94,13 @@ pub fn build_loader_injection_plan(
     let mut plan = LoaderInjectionPlan::default();
     let roots = loader_artifact_roots();
     let mut seen_sources = HashSet::new();
+    let target_native_abis = target_loader_abis(artifact);
+    if !artifact.native_abis.is_empty() && target_native_abis.is_empty() {
+        plan.issues.push(format!(
+            "no supported native loader ABI matches input native ABIs: {}",
+            artifact.native_abis.join(", ")
+        ));
+    }
 
     let dex_sources = discover_loader_dex_files(&roots);
     let mut next_dex_index = next_loader_dex_index(kind, artifact);
@@ -116,10 +141,48 @@ pub fn build_loader_injection_plan(
             ));
             continue;
         };
+        if !target_native_abis.contains(abi) {
+            continue;
+        }
         let target = native_library_target(kind, abi);
         plan.native_targets.push(target.clone());
         plan.files.push(LoaderInjectionFile {
             source: LoaderArtifactSource::File(source),
+            target,
+            kind: LoaderArtifactKind::NativeLibrary,
+        });
+    }
+    let mut injected_abis = plan
+        .native_targets
+        .iter()
+        .filter_map(|target| {
+            target.split('/').nth(match kind {
+                ArtifactKind::Aab => 2,
+                ArtifactKind::Apk | ArtifactKind::Unknown => 1,
+            })
+        })
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
+    for (abi, bytes) in EMBEDDED_NATIVE_LIBS {
+        if bytes.is_empty()
+            || !target_native_abis.contains(*abi)
+            || !injected_abis.insert((*abi).to_string())
+        {
+            continue;
+        }
+        let target = native_library_target(kind, abi);
+        plan.native_targets.push(target.clone());
+        plan.files.push(LoaderInjectionFile {
+            source: LoaderArtifactSource::Embedded {
+                name: match *abi {
+                    "arm64-v8a" => "built-in tools/loader/lib/arm64-v8a/libprotector_vm.so",
+                    "armeabi-v7a" => "built-in tools/loader/lib/armeabi-v7a/libprotector_vm.so",
+                    "x86_64" => "built-in tools/loader/lib/x86_64/libprotector_vm.so",
+                    "x86" => "built-in tools/loader/lib/x86/libprotector_vm.so",
+                    _ => "built-in libprotector_vm.so",
+                },
+                bytes,
+            },
             target,
             kind: LoaderArtifactKind::NativeLibrary,
         });
@@ -249,6 +312,19 @@ fn native_library_target(kind: ArtifactKind, abi: &str) -> String {
     }
 }
 
+fn target_loader_abis(artifact: &ArtifactInfo) -> HashSet<String> {
+    if artifact.native_abis.is_empty() {
+        return KNOWN_ABIS.iter().map(|abi| (*abi).to_string()).collect();
+    }
+
+    artifact
+        .native_abis
+        .iter()
+        .filter(|abi| KNOWN_ABIS.contains(&abi.as_str()))
+        .cloned()
+        .collect()
+}
+
 fn infer_abi(path: &Path) -> Option<&str> {
     path.parent()
         .and_then(Path::file_name)
@@ -326,5 +402,43 @@ mod tests {
         assert!(dex_strings.contains("Lcom/protector/runtime/ProtectorRuntime;"));
         assert!(dex_strings.contains("Landroidx/core/app/CoreComponentFactory;"));
         assert!(dex_strings.contains("Ldalvik/system/DexClassLoader;"));
+    }
+
+    #[test]
+    fn loader_plan_includes_all_builtin_native_abis_when_input_has_no_native_libs() {
+        let plan = build_loader_injection_plan(ArtifactKind::Apk, &ArtifactInfo::default());
+        for abi in KNOWN_ABIS {
+            assert!(plan
+                .native_targets
+                .iter()
+                .any(|target| target == &format!("lib/{abi}/{NATIVE_LIBRARY_NAME}")));
+        }
+    }
+
+    #[test]
+    fn loader_plan_matches_input_native_abis_when_present() {
+        let artifact = ArtifactInfo {
+            native_abis: vec!["arm64-v8a".to_string()],
+            ..ArtifactInfo::default()
+        };
+
+        let plan = build_loader_injection_plan(ArtifactKind::Apk, &artifact);
+
+        assert!(plan
+            .native_targets
+            .iter()
+            .any(|target| target == &format!("lib/arm64-v8a/{NATIVE_LIBRARY_NAME}")));
+        assert!(!plan
+            .native_targets
+            .iter()
+            .any(|target| target.contains("armeabi-v7a")));
+        assert!(!plan
+            .native_targets
+            .iter()
+            .any(|target| target.contains("x86/")));
+        assert!(!plan
+            .native_targets
+            .iter()
+            .any(|target| target.contains("x86_64")));
     }
 }

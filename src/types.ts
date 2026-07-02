@@ -98,7 +98,7 @@ export interface ChannelPackageResult {
   packages: ChannelPackage[];
 }
 
-export type SigningScheme = "v1v2" | "v1v2v3";
+export type SigningScheme = "v1v2" | "v2v3" | "v1v2v3";
 
 export interface SigningConfig {
   keystorePath: string;

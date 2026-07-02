@@ -312,7 +312,12 @@ fn build_encrypted_dex_payload(
             .map_err(|err| format!("failed to finish dex payload zip: {err}"))?;
     }
 
-    let context = serde_json::to_vec(&artifact.dex_files).unwrap_or_default();
+    let context = artifact
+        .package_name
+        .as_deref()
+        .unwrap_or_default()
+        .as_bytes()
+        .to_vec();
     crypto::encrypt_bytes(cursor.get_ref(), &context, payload_file)
 }
 
@@ -548,12 +553,16 @@ fn build_apk_sign_command(
     {
         command.arg("--ks-type").arg(store_type);
     }
-    let enable_v3 = matches!(signing.signing_scheme, SigningScheme::V1V2V3);
+    let (enable_v1, enable_v2, enable_v3) = match signing.signing_scheme {
+        SigningScheme::V1V2 => (true, true, false),
+        SigningScheme::V2V3 => (false, true, true),
+        SigningScheme::V1V2V3 => (true, true, true),
+    };
     command
         .arg("--v1-signing-enabled")
-        .arg("true")
+        .arg(if enable_v1 { "true" } else { "false" })
         .arg("--v2-signing-enabled")
-        .arg("true")
+        .arg(if enable_v2 { "true" } else { "false" })
         .arg("--v3-signing-enabled")
         .arg(if enable_v3 { "true" } else { "false" });
     command.arg("--out").arg(output).arg(input);
@@ -922,6 +931,32 @@ mod tests {
         );
         let args = command_args(&command);
 
+        assert_eq!(
+            args[arg_index(&args, "--v3-signing-enabled") + 1].as_str(),
+            "true"
+        );
+    }
+
+    #[test]
+    fn apk_signing_can_use_v2_v3_without_v1() {
+        let mut signing = test_signing_config();
+        signing.signing_scheme = SigningScheme::V2V3;
+        let command = build_apk_sign_command(
+            "apksigner",
+            Path::new("input.apk"),
+            Path::new("output.apk"),
+            &signing,
+        );
+        let args = command_args(&command);
+
+        assert_eq!(
+            args[arg_index(&args, "--v1-signing-enabled") + 1].as_str(),
+            "false"
+        );
+        assert_eq!(
+            args[arg_index(&args, "--v2-signing-enabled") + 1].as_str(),
+            "true"
+        );
         assert_eq!(
             args[arg_index(&args, "--v3-signing-enabled") + 1].as_str(),
             "true"

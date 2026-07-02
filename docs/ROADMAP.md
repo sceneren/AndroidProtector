@@ -48,6 +48,8 @@
 - 签名信息弹窗改为单列字段顺序：签名文件、Store password、Alias、Key password、签名方式，并隐藏 Store type 和底部别名详情。
 - DEX 加密从 metadata-only 调整为真实加密 payload：输出包移除原始 `classes*.dex`，仅保留 loader dex、加密 payload 和 metadata，loader 启动时解密并安装运行时 DexClassLoader。
 - 修复 DEX 加密包启动问题：loader 内置 AndroidX `CoreComponentFactory` 兼容类，DexClassLoader native 搜索路径补充 APK 内 `lib/<abi>`，运行时 dex 写入后设为只读。
+- DEX payload JSON 移除明文 `keyB64`，改为 native loader 派生密钥解包 `wrappedKeyB64`；payload key 不再直接写入 assets metadata，Java loader 不保留 wrapping key 静态种子。
+- native loader 补齐 `arm64-v8a`、`armeabi-v7a`、`x86_64`、`x86` 四个 ABI，并作为内置资源随桌面程序提供；当输入包已有业务 native libs 时，仅注入与业务 ABI 一致的壳库 ABI，避免额外 ABI 影响系统选择。
 
 ## 优先级最高的工作
 

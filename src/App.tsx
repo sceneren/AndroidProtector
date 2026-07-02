@@ -534,7 +534,7 @@ export default function App() {
         <div>
           <div className="product-mark">
             <Shield size={24} />
-            <span>Android 第三代加固工具</span>
+            <span>Android 加固工具</span>
           </div>
           <div className="subline">APK / AAB · VMP · DEX payload · 签名验证</div>
         </div>
@@ -913,6 +913,7 @@ function SigningProfileModal({
               签名方式
               <select value={draft.signingScheme ?? "v1v2"} onChange={(event) => onDraftChange({ ...draft, signingScheme: event.target.value as SigningProfileInput["signingScheme"] })}>
                 <option value="v1v2">V1 + V2</option>
+                <option value="v2v3">V2 + V3</option>
                 <option value="v1v2v3">V1 + V2 + V3</option>
               </select>
             </label>
@@ -1283,6 +1284,7 @@ function inferArtifactKind(path: string): "apk" | "aab" | "unknown" {
 }
 
 function formatSigningScheme(value?: string | null) {
+  if (value === "v2v3") return "V2+V3";
   return value === "v1v2v3" ? "V1+V2+V3" : "V1+V2";
 }
 

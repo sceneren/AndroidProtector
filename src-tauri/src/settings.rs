@@ -11,6 +11,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+const CONFIG_DIR_NAME: &str = "AndroidProtector";
+const SECRET_PREFIX_V2: &str = "v2:";
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct StoredPreferences {
@@ -198,7 +201,7 @@ pub fn signing_profile_input(id: &str) -> Result<Option<SigningProfileInput>, St
 }
 
 fn load_stored_preferences() -> Result<StoredPreferences, String> {
-    let path = settings_path()?;
+    let path = existing_settings_path()?;
     if !path.exists() {
         return Ok(StoredPreferences::default());
     }
@@ -234,14 +237,26 @@ fn to_public_profile(profile: &StoredSigningProfile) -> SigningProfile {
 }
 
 fn settings_path() -> Result<PathBuf, String> {
-    Ok(config_root()?.join("settings.json"))
+    Ok(config_root(CONFIG_DIR_NAME)?.join("settings.json"))
 }
 
-fn config_root() -> Result<PathBuf, String> {
+fn existing_settings_path() -> Result<PathBuf, String> {
+    let path = settings_path()?;
+    if path.exists() {
+        return Ok(path);
+    }
+    let legacy_path = config_root(&legacy_config_dir_name())?.join("settings.json");
+    if legacy_path.exists() {
+        return Ok(legacy_path);
+    }
+    Ok(path)
+}
+
+fn config_root(dir_name: &str) -> Result<PathBuf, String> {
     if cfg!(target_os = "windows") {
         std::env::var("APPDATA")
             .map(PathBuf::from)
-            .map(|path| path.join("AndroidThirdgenProtector"))
+            .map(|path| path.join(dir_name))
             .map_err(|_| "APPDATA is not set".to_string())
     } else if cfg!(target_os = "macos") {
         std::env::var("HOME")
@@ -249,16 +264,20 @@ fn config_root() -> Result<PathBuf, String> {
                 Path::new(&home)
                     .join("Library")
                     .join("Application Support")
-                    .join("AndroidThirdgenProtector")
+                    .join(dir_name)
             })
             .map_err(|_| "HOME is not set".to_string())
     } else {
         std::env::var("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .or_else(|_| std::env::var("HOME").map(|home| Path::new(&home).join(".config")))
-            .map(|path| path.join("AndroidThirdgenProtector"))
+            .map(|path| path.join(dir_name))
             .map_err(|_| "HOME is not set".to_string())
     }
+}
+
+fn legacy_config_dir_name() -> String {
+    ["Android", "Third", "gen", "Protector"].concat()
 }
 
 fn clean_opt(value: &str) -> Option<String> {
@@ -267,7 +286,11 @@ fn clean_opt(value: &str) -> Option<String> {
 }
 
 fn encode_secret(secret: &str) -> String {
-    let key = secret_key();
+    let key = current_secret_key();
+    format!("{SECRET_PREFIX_V2}{}", encode_secret_with_key(secret, &key))
+}
+
+fn encode_secret_with_key(secret: &str, key: &[u8]) -> String {
     let bytes = secret
         .as_bytes()
         .iter()
@@ -278,7 +301,13 @@ fn encode_secret(secret: &str) -> String {
 }
 
 fn decode_secret(encoded: &str) -> Result<String, String> {
-    let key = secret_key();
+    if let Some(encoded) = encoded.strip_prefix(SECRET_PREFIX_V2) {
+        return decode_secret_with_key(encoded, &current_secret_key());
+    }
+    decode_secret_with_key(encoded, &legacy_secret_key())
+}
+
+fn decode_secret_with_key(encoded: &str, key: &[u8]) -> Result<String, String> {
     let bytes = STANDARD
         .decode(encoded)
         .map_err(|err| format!("failed to decode saved secret: {err}"))?
@@ -289,9 +318,18 @@ fn decode_secret(encoded: &str) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|err| format!("saved secret is not valid utf-8: {err}"))
 }
 
-fn secret_key() -> Vec<u8> {
+fn current_secret_key() -> Vec<u8> {
+    secret_key(b"android-protector-v1")
+}
+
+fn legacy_secret_key() -> Vec<u8> {
+    let domain = ["android-", "third", "gen-protector-v1"].concat();
+    secret_key(domain.as_bytes())
+}
+
+fn secret_key(domain: &[u8]) -> Vec<u8> {
     let mut hasher = Sha256::new();
-    hasher.update(b"android-thirdgen-protector-v1");
+    hasher.update(domain);
     if let Ok(value) = std::env::var("USERNAME").or_else(|_| std::env::var("USER")) {
         hasher.update(value.as_bytes());
     }
@@ -309,6 +347,13 @@ mod tests {
     fn obfuscated_secret_roundtrips() {
         let encoded = encode_secret("password");
         assert_ne!(encoded, "password");
+        assert!(encoded.starts_with(SECRET_PREFIX_V2));
+        assert_eq!(decode_secret(&encoded).unwrap(), "password");
+    }
+
+    #[test]
+    fn legacy_obfuscated_secret_decodes() {
+        let encoded = encode_secret_with_key("password", &legacy_secret_key());
         assert_eq!(decode_secret(&encoded).unwrap(), "password");
     }
 }

@@ -5,8 +5,8 @@
 
 ## 项目身份
 
-- 项目名称：Android APK/AAB 第三代加固工具
-- 包名/标识：`com.codex.android-thirdgen-protector`
+- 项目名称：Android APK/AAB 加固工具
+- 包名/标识：`com.codex.android-protector`
 - 技术栈：React 18 + TypeScript + Vite + Tauri 2 + Rust + Android Gradle/CMake loader
 - 核心模块：`frontend`、`tauri-core`、`android-loader`
 - NDK/C++：是，loader 使用 `protector_vm` native library
