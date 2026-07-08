@@ -520,6 +520,15 @@ fn sign_apk(
     run_command("sign", &mut command)
 }
 
+pub fn sign_apk_with_apksigner(
+    apksigner: &str,
+    input: &Path,
+    output: &Path,
+    signing: &SigningConfig,
+) -> Result<(), String> {
+    sign_apk(apksigner, input, output, signing).map_err(|err| err.to_string())
+}
+
 fn build_apk_sign_command(
     apksigner: &str,
     input: &Path,

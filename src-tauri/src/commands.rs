@@ -10,6 +10,7 @@ use std::process::Command;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::State;
+use tempfile::tempdir;
 use uuid::Uuid;
 
 #[tauri::command]
@@ -115,6 +116,8 @@ pub fn package_channels(
     input_path: String,
     output_dir: String,
     channels: Vec<String>,
+    signing_profile_id: Option<String>,
+    toolchain_paths: Option<ToolchainPaths>,
 ) -> Result<channel::ChannelPackageResult, String> {
     let input = Path::new(input_path.trim());
     let output_dir = Path::new(output_dir.trim());
@@ -124,7 +127,86 @@ pub fn package_channels(
     if output_dir.as_os_str().is_empty() {
         return Err("channel output directory is required".to_string());
     }
+    let signing_profile_id = signing_profile_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(profile_id) = signing_profile_id {
+        return sign_apk_then_package_channels(
+            input,
+            output_dir,
+            &channels,
+            profile_id,
+            toolchain_paths,
+        );
+    }
     channel::write_channel_packages_to_dir(input, output_dir, &channels)
+}
+
+fn sign_apk_then_package_channels(
+    input: &Path,
+    output_dir: &Path,
+    channels: &[String],
+    signing_profile_id: &str,
+    toolchain_paths: Option<ToolchainPaths>,
+) -> Result<channel::ChannelPackageResult, String> {
+    if input
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
+        .as_deref()
+        != Some("apk")
+    {
+        return Err("multi-channel packaging only supports APK files".to_string());
+    }
+    let signing = settings::signing_config_for_profile(signing_profile_id)?
+        .ok_or_else(|| format!("signing profile not found: {signing_profile_id}"))?;
+    let detected = toolchain::detect_toolchain(toolchain_paths.as_ref());
+    let zipalign = toolchain::command_path(&detected.zipalign)
+        .ok_or_else(|| "zipalign is required before signing unsigned APK".to_string())?;
+    let apksigner = toolchain::command_path(&detected.apksigner)
+        .ok_or_else(|| "apksigner is required for signing unsigned APK".to_string())?;
+
+    let temp = tempdir().map_err(|err| format!("failed to create signing temp dir: {err}"))?;
+    let file_name = input
+        .file_name()
+        .map(|value| value.to_owned())
+        .unwrap_or_else(|| "source.apk".into());
+    let stem = input
+        .file_stem()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| "source".to_string());
+    let aligned = temp.path().join(format!("{stem}.aligned.apk"));
+    let signed = temp.path().join(file_name);
+
+    let mut zipalign_command = toolchain::command_for_tool(&zipalign);
+    zipalign_command
+        .arg("-f")
+        .arg("-p")
+        .arg("4")
+        .arg(input)
+        .arg(&aligned);
+    run_simple_command("zipalign", &mut zipalign_command)?;
+    protect::sign_apk_with_apksigner(&apksigner, &aligned, &signed, &signing)?;
+    channel::write_channel_packages_to_dir(&signed, output_dir, channels)
+}
+
+fn run_simple_command(stage: &str, command: &mut Command) -> Result<(), String> {
+    let output = command
+        .output()
+        .map_err(|err| format!("[{stage}] failed to start command: {err}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        format!("exit code {:?}", output.status.code())
+    };
+    Err(format!("[{stage}] {detail}"))
 }
 
 #[tauri::command]

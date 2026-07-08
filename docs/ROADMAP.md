@@ -41,6 +41,7 @@
 - loader runtime 增加从 protector metadata 读取原始 Application 的 fallback。
 - 新增多渠道打包卡片和 APK Signing Block 渠道写入模块。
 - 顶部新增“加固 / 渠道包”Tab，“渠道包”Tab 独立支持 APK 渠道包生成。
+- “渠道包”Tab 支持输入 APK 签名状态选择：已签名 APK 保持直接写渠道逻辑；未签名 APK 可选择已保存签名信息，先执行 zipalign + apksigner，再生成渠道包。
 - 修复加固后启动即闪退：补齐 `tools/loader/classes.dex`，后端内置 dex fallback，并在 loader dex 缺失时停止产物生成。
 - loader runtime 对 native so 缺失启用兼容降级，避免当前骨架阶段因 `System.loadLibrary` 失败直接崩溃。
 - 优化加固包体积：当前兼容模式不再重复写入完整加密 DEX payload，VMP 计划文件改为摘要和少量样例。

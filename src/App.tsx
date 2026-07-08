@@ -85,6 +85,7 @@ export default function App() {
   const [channelTabInputPath, setChannelTabInputPath] = useState("");
   const [channelTabOutputDir, setChannelTabOutputDir] = useState("");
   const [channelTabChannels, setChannelTabChannels] = useState<string[]>([]);
+  const [channelTabInputSigned, setChannelTabInputSigned] = useState<"signed" | "unsigned">("signed");
   const [channelTabResult, setChannelTabResult] = useState<ChannelPackageResult | null>(null);
   const [channelTabBusy, setChannelTabBusy] = useState(false);
   const [includeRulesText, setIncludeRulesText] = useState("");
@@ -497,7 +498,9 @@ export default function App() {
       const result = await invoke<ChannelPackageResult>("package_channels", {
         inputPath: channelTabInputPath,
         outputDir: channelTabOutputDir,
-        channels: channelTabChannels
+        channels: channelTabChannels,
+        signingProfileId: channelTabInputSigned === "unsigned" ? selectedSigningProfileId : null,
+        toolchainPaths: channelTabInputSigned === "unsigned" ? toolchainPaths : null
       });
       setChannelTabResult(result);
       if (result.outputDir) {
@@ -508,7 +511,7 @@ export default function App() {
     } finally {
       setChannelTabBusy(false);
     }
-  }, [channelTabChannels, channelTabInputPath, channelTabOutputDir]);
+  }, [channelTabChannels, channelTabInputPath, channelTabInputSigned, channelTabOutputDir, selectedSigningProfileId, toolchainPaths]);
 
   const running = job?.lifecycle === "running" || job?.lifecycle === "queued";
   const inferredInputKind = inferArtifactKind(inputPath);
@@ -519,6 +522,7 @@ export default function App() {
   const canPackageChannels =
     inferArtifactKind(channelTabInputPath) === "apk" &&
     Boolean(channelTabOutputDir && channelTabChannels.length > 0) &&
+    (channelTabInputSigned === "signed" || Boolean(selectedSigningProfileId)) &&
     !channelTabBusy;
 
   useEffect(() => {
@@ -751,6 +755,9 @@ export default function App() {
           inputPath={channelTabInputPath}
           outputDir={channelTabOutputDir}
           channels={channelTabChannels}
+          inputSigned={channelTabInputSigned}
+          signingProfiles={preferences.signingProfiles}
+          selectedSigningProfileId={selectedSigningProfileId}
           busy={channelTabBusy}
           canStart={canPackageChannels}
           result={channelTabResult}
@@ -765,6 +772,11 @@ export default function App() {
           onSelectInput={selectChannelTabInput}
           onSelectOutputDir={selectChannelTabOutputDir}
           onToggleChannel={toggleChannelTabChannel}
+          onInputSignedChange={setChannelTabInputSigned}
+          onSelectSigningProfile={chooseSigningProfile}
+          onAddSigningProfile={openCreateProfile}
+          onEditSigningProfile={openEditProfile}
+          onDeleteSigningProfile={deleteProfile}
           onPackage={packageChannelTab}
           onOpenOutput={openOutputPath}
           onCopyPath={copyOutputPath}
@@ -960,6 +972,9 @@ function ChannelPackageWorkspace({
   inputPath,
   outputDir,
   channels,
+  inputSigned,
+  signingProfiles,
+  selectedSigningProfileId,
   busy,
   canStart,
   result,
@@ -968,6 +983,11 @@ function ChannelPackageWorkspace({
   onSelectInput,
   onSelectOutputDir,
   onToggleChannel,
+  onInputSignedChange,
+  onSelectSigningProfile,
+  onAddSigningProfile,
+  onEditSigningProfile,
+  onDeleteSigningProfile,
   onPackage,
   onOpenOutput,
   onCopyPath
@@ -975,6 +995,9 @@ function ChannelPackageWorkspace({
   inputPath: string;
   outputDir: string;
   channels: string[];
+  inputSigned: "signed" | "unsigned";
+  signingProfiles: SigningProfile[];
+  selectedSigningProfileId: string | null;
   busy: boolean;
   canStart: boolean;
   result: ChannelPackageResult | null;
@@ -983,6 +1006,11 @@ function ChannelPackageWorkspace({
   onSelectInput: () => void;
   onSelectOutputDir: () => void;
   onToggleChannel: (channel: string, checked: boolean) => void;
+  onInputSignedChange: (value: "signed" | "unsigned") => void;
+  onSelectSigningProfile: (id: string) => void;
+  onAddSigningProfile: () => void;
+  onEditSigningProfile: (profile: SigningProfile) => void;
+  onDeleteSigningProfile: (profile: SigningProfile) => void;
   onPackage: () => void;
   onOpenOutput: (path?: string | null) => void;
   onCopyPath: (path?: string | null) => void;
@@ -1001,6 +1029,49 @@ function ChannelPackageWorkspace({
         </div>
         {unsupportedInput && <div className="inline-hint">渠道包只支持 APK，不支持 AAB 或其他文件。</div>}
       </Panel>
+
+      <Panel icon={<Shield size={18} />} title="APK 签名状态">
+        <div className="radio-group">
+          <label className={inputSigned === "signed" ? "selected" : ""}>
+            <input
+              type="radio"
+              name="channel-input-signed"
+              checked={inputSigned === "signed"}
+              onChange={() => onInputSignedChange("signed")}
+            />
+            <span>已签名</span>
+          </label>
+          <label className={inputSigned === "unsigned" ? "selected" : ""}>
+            <input
+              type="radio"
+              name="channel-input-signed"
+              checked={inputSigned === "unsigned"}
+              onChange={() => onInputSignedChange("unsigned")}
+            />
+            <span>未签名</span>
+          </label>
+        </div>
+        {inputSigned === "unsigned" && (
+          <div className="inline-hint">未签名 APK 会先使用下方签名信息完成 zipalign + apksigner，再生成渠道包。</div>
+        )}
+      </Panel>
+
+      {inputSigned === "unsigned" && (
+        <Panel icon={<KeyRound size={18} />} title="签名信息">
+          <SigningProfileList
+            profiles={signingProfiles}
+            selectedId={selectedSigningProfileId}
+            onSelect={onSelectSigningProfile}
+            onEdit={onEditSigningProfile}
+            onDelete={onDeleteSigningProfile}
+          />
+          <button className="secondary full" onClick={onAddSigningProfile}>
+            <Plus size={16} />
+            新增签名
+          </button>
+          {!selectedSigningProfileId && <div className="inline-hint">未签名 APK 需要选择一个签名信息。</div>}
+        </Panel>
+      )}
 
       <Panel icon={<FolderOpen size={18} />} title="渠道包输出目录">
         <div className="path-row solo">
