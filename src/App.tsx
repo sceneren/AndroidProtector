@@ -27,10 +27,12 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  ApkSigningResult,
   AppPreferences,
   ArtifactInfo,
   ChannelOptions,
   ChannelPackageResult,
+  ChannelPackagingMethod,
   JobStatus,
   ProtectRequest,
   ProtectionOptions,
@@ -79,15 +81,20 @@ const emptyProfileDraft: SigningProfileInput = {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"protect" | "channels">("protect");
+  const [activeTab, setActiveTab] = useState<"protect" | "channels" | "sign">("protect");
   const [inputPath, setInputPath] = useState("");
   const [outputDir, setOutputDir] = useState("");
   const [channelTabInputPath, setChannelTabInputPath] = useState("");
   const [channelTabOutputDir, setChannelTabOutputDir] = useState("");
   const [channelTabChannels, setChannelTabChannels] = useState<string[]>([]);
   const [channelTabInputSigned, setChannelTabInputSigned] = useState<"signed" | "unsigned">("signed");
+  const [channelTabMethod, setChannelTabMethod] = useState<ChannelPackagingMethod>("existing");
   const [channelTabResult, setChannelTabResult] = useState<ChannelPackageResult | null>(null);
   const [channelTabBusy, setChannelTabBusy] = useState(false);
+  const [signTabInputPath, setSignTabInputPath] = useState("");
+  const [signTabOutputDir, setSignTabOutputDir] = useState("");
+  const [signTabResult, setSignTabResult] = useState<ApkSigningResult | null>(null);
+  const [signTabBusy, setSignTabBusy] = useState(false);
   const [includeRulesText, setIncludeRulesText] = useState("");
   const [excludeRulesText, setExcludeRulesText] = useState("");
   const [vmpOptions, setVmpOptions] = useState<VmpOptions>(defaultVmpOptions);
@@ -140,6 +147,7 @@ export default function App() {
     if (next.lastOutputDir) {
       setOutputDir((current) => current || next.lastOutputDir || "");
       setChannelTabOutputDir((current) => current || next.lastOutputDir || "");
+      setSignTabOutputDir((current) => current || next.lastOutputDir || "");
     }
   }, []);
 
@@ -461,6 +469,25 @@ export default function App() {
     }
   };
 
+  const selectSignTabInput = async () => {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "APK", extensions: ["apk"] }]
+    });
+    if (typeof selected === "string") {
+      setSignTabInputPath(selected);
+      setSignTabResult(null);
+    }
+  };
+
+  const selectSignTabOutputDir = async () => {
+    const selected = await open({ directory: true, multiple: false });
+    if (typeof selected === "string") {
+      setSignTabOutputDir(selected);
+      setSignTabResult(null);
+    }
+  };
+
   const selectProfileKeystore = async () => {
     const selected = await open({
       multiple: false,
@@ -499,8 +526,9 @@ export default function App() {
         inputPath: channelTabInputPath,
         outputDir: channelTabOutputDir,
         channels: channelTabChannels,
+        method: channelTabMethod,
         signingProfileId: channelTabInputSigned === "unsigned" ? selectedSigningProfileId : null,
-        toolchainPaths: channelTabInputSigned === "unsigned" ? toolchainPaths : null
+        toolchainPaths
       });
       setChannelTabResult(result);
       if (result.outputDir) {
@@ -511,7 +539,28 @@ export default function App() {
     } finally {
       setChannelTabBusy(false);
     }
-  }, [channelTabChannels, channelTabInputPath, channelTabInputSigned, channelTabOutputDir, selectedSigningProfileId, toolchainPaths]);
+  }, [channelTabChannels, channelTabInputPath, channelTabInputSigned, channelTabMethod, channelTabOutputDir, selectedSigningProfileId, toolchainPaths]);
+
+  const signApk = useCallback(async () => {
+    if (signTabBusy || !signTabInputPath.trim() || !signTabOutputDir.trim() || !selectedSigningProfileId) return;
+    setSignTabBusy(true);
+    setSignTabResult(null);
+    setError(null);
+    try {
+      const result = await invoke<ApkSigningResult>("sign_apk", {
+        inputPath: signTabInputPath,
+        outputDir: signTabOutputDir,
+        signingProfileId: selectedSigningProfileId,
+        toolchainPaths
+      });
+      setSignTabResult(result);
+      void invoke<void>("open_output_dir", { path: result.outputDir }).catch((err) => setError(String(err)));
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSignTabBusy(false);
+    }
+  }, [selectedSigningProfileId, signTabBusy, signTabInputPath, signTabOutputDir, toolchainPaths]);
 
   const running = job?.lifecycle === "running" || job?.lifecycle === "queued";
   const inferredInputKind = inferArtifactKind(inputPath);
@@ -524,6 +573,14 @@ export default function App() {
     Boolean(channelTabOutputDir && channelTabChannels.length > 0) &&
     (channelTabInputSigned === "signed" || Boolean(selectedSigningProfileId)) &&
     !channelTabBusy;
+  const canSignApk =
+    inferArtifactKind(signTabInputPath) === "apk" &&
+    Boolean(signTabOutputDir.trim() && selectedSigningProfile) &&
+    !signTabBusy;
+
+  useEffect(() => {
+    setSignTabResult(null);
+  }, [selectedSigningProfile]);
 
   useEffect(() => {
     if (!channelPackagingDisabled) return;
@@ -563,6 +620,10 @@ export default function App() {
         <button className={activeTab === "channels" ? "active" : ""} onClick={() => setActiveTab("channels")}>
           <Tags size={16} />
           渠道包
+        </button>
+        <button className={activeTab === "sign" ? "active" : ""} onClick={() => setActiveTab("sign")}>
+          <KeyRound size={16} />
+          签名apk
         </button>
       </nav>
 
@@ -750,12 +811,17 @@ export default function App() {
           </Panel>
         </aside>
       </section>
-      ) : (
+      ) : activeTab === "channels" ? (
         <ChannelPackageWorkspace
           inputPath={channelTabInputPath}
           outputDir={channelTabOutputDir}
           channels={channelTabChannels}
           inputSigned={channelTabInputSigned}
+          method={channelTabMethod}
+          onMethodChange={(value) => {
+            setChannelTabMethod(value);
+            setChannelTabResult(null);
+          }}
           signingProfiles={preferences.signingProfiles}
           selectedSigningProfileId={selectedSigningProfileId}
           busy={channelTabBusy}
@@ -778,6 +844,33 @@ export default function App() {
           onEditSigningProfile={openEditProfile}
           onDeleteSigningProfile={deleteProfile}
           onPackage={packageChannelTab}
+          onOpenOutput={openOutputPath}
+          onCopyPath={copyOutputPath}
+        />
+      ) : (
+        <ApkSigningWorkspace
+          inputPath={signTabInputPath}
+          outputDir={signTabOutputDir}
+          signingProfiles={preferences.signingProfiles}
+          selectedSigningProfileId={selectedSigningProfileId}
+          busy={signTabBusy}
+          canStart={canSignApk}
+          result={signTabResult}
+          onInputChange={(value) => {
+            setSignTabInputPath(value);
+            setSignTabResult(null);
+          }}
+          onOutputDirChange={(value) => {
+            setSignTabOutputDir(value);
+            setSignTabResult(null);
+          }}
+          onSelectInput={selectSignTabInput}
+          onSelectOutputDir={selectSignTabOutputDir}
+          onSelectSigningProfile={chooseSigningProfile}
+          onAddSigningProfile={openCreateProfile}
+          onEditSigningProfile={openEditProfile}
+          onDeleteSigningProfile={deleteProfile}
+          onSign={signApk}
           onOpenOutput={openOutputPath}
           onCopyPath={copyOutputPath}
         />
@@ -805,13 +898,15 @@ function SigningProfileList({
   selectedId,
   onSelect,
   onEdit,
-  onDelete
+  onDelete,
+  disabled = false
 }: {
   profiles: SigningProfile[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   onEdit: (profile: SigningProfile) => void;
   onDelete: (profile: SigningProfile) => void;
+  disabled?: boolean;
 }) {
   if (profiles.length === 0) {
     return <div className="empty-state">暂无已保存签名。</div>;
@@ -822,7 +917,7 @@ function SigningProfileList({
       {profiles.map((profile) => (
         <div className={`profile-item ${profile.id === selectedId ? "selected" : ""}`} key={profile.id}>
           <label className="profile-main">
-            <input type="radio" checked={profile.id === selectedId} onChange={() => onSelect(profile.id)} />
+            <input type="radio" checked={profile.id === selectedId} disabled={disabled} onChange={() => onSelect(profile.id)} />
             <span>
               <strong>{profile.name}</strong>
               <small>{profile.alias} · {formatSigningScheme(profile.signingScheme)}</small>
@@ -830,10 +925,10 @@ function SigningProfileList({
             </span>
           </label>
           <div className="profile-actions">
-            <button className="icon-button small" onClick={() => onEdit(profile)} title="编辑签名">
+            <button className="icon-button small" disabled={disabled} onClick={() => onEdit(profile)} title="编辑签名">
               <Pencil size={15} />
             </button>
-            <button className="icon-button small danger" onClick={() => onDelete(profile)} title="删除签名">
+            <button className="icon-button small danger" disabled={disabled} onClick={() => onDelete(profile)} title="删除签名">
               <Trash2 size={15} />
             </button>
           </div>
@@ -973,6 +1068,8 @@ function ChannelPackageWorkspace({
   outputDir,
   channels,
   inputSigned,
+  method,
+  onMethodChange,
   signingProfiles,
   selectedSigningProfileId,
   busy,
@@ -996,6 +1093,8 @@ function ChannelPackageWorkspace({
   outputDir: string;
   channels: string[];
   inputSigned: "signed" | "unsigned";
+  method: ChannelPackagingMethod;
+  onMethodChange: (value: ChannelPackagingMethod) => void;
   signingProfiles: SigningProfile[];
   selectedSigningProfileId: string | null;
   busy: boolean;
@@ -1020,6 +1119,23 @@ function ChannelPackageWorkspace({
 
   return (
     <section className="single-column">
+      <Panel icon={<Tags size={18} />} title="渠道包方式">
+        <div className="radio-group">
+          <label className={method === "existing" ? "selected" : ""}>
+            <input type="radio" name="channel-packaging-method" checked={method === "existing"} disabled={busy} onChange={() => onMethodChange("existing")} />
+            <span>当前方式</span>
+          </label>
+          <label className={method === "vasDolly" ? "selected" : ""}>
+            <input type="radio" name="channel-packaging-method" checked={method === "vasDolly"} disabled={busy} onChange={() => onMethodChange("vasDolly")} />
+            <span>VasDolly</span>
+          </label>
+        </div>
+        <div className="inline-hint">
+          {method === "vasDolly"
+            ? "使用腾讯 VasDolly 生成渠道包，支持 V1 / V2 / V3 签名。应用需接入 VasDolly helper 读取渠道信息。"
+            : "使用现有渠道格式生成 APK，需要原包包含 V2 签名。"}
+        </div>
+      </Panel>
       <Panel icon={<FileArchive size={18} />} title="原始包">
         <div className="path-row solo">
           <input value={inputPath} onChange={(event) => onInputChange(event.target.value)} placeholder="已签名 APK 路径" />
@@ -1121,6 +1237,117 @@ function ChannelPackageWorkspace({
                   <code>{item.path}</code>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+      </Panel>
+    </section>
+  );
+}
+
+function ApkSigningWorkspace({
+  inputPath,
+  outputDir,
+  signingProfiles,
+  selectedSigningProfileId,
+  busy,
+  canStart,
+  result,
+  onInputChange,
+  onOutputDirChange,
+  onSelectInput,
+  onSelectOutputDir,
+  onSelectSigningProfile,
+  onAddSigningProfile,
+  onEditSigningProfile,
+  onDeleteSigningProfile,
+  onSign,
+  onOpenOutput,
+  onCopyPath
+}: {
+  inputPath: string;
+  outputDir: string;
+  signingProfiles: SigningProfile[];
+  selectedSigningProfileId: string | null;
+  busy: boolean;
+  canStart: boolean;
+  result: ApkSigningResult | null;
+  onInputChange: (value: string) => void;
+  onOutputDirChange: (value: string) => void;
+  onSelectInput: () => void;
+  onSelectOutputDir: () => void;
+  onSelectSigningProfile: (id: string) => void;
+  onAddSigningProfile: () => void;
+  onEditSigningProfile: (profile: SigningProfile) => void;
+  onDeleteSigningProfile: (profile: SigningProfile) => void;
+  onSign: () => void;
+  onOpenOutput: (path?: string | null) => void;
+  onCopyPath: (path?: string | null) => void;
+}) {
+  const unsupportedInput = inputPath.trim().length > 0 && inferArtifactKind(inputPath) !== "apk";
+
+  return (
+    <section className="single-column">
+      <Panel icon={<FileArchive size={18} />} title="原始包">
+        <div className="path-row solo">
+          <input value={inputPath} disabled={busy} onChange={(event) => onInputChange(event.target.value)} placeholder="APK 路径" />
+          <button className="icon-button" disabled={busy} onClick={onSelectInput} title="选择 APK">
+            <FolderOpen size={18} />
+          </button>
+        </div>
+        {unsupportedInput
+          ? <div className="inline-hint">签名apk 只支持 APK，不支持 AAB 或其他文件。</div>
+          : <div className="inline-hint">支持未签名 APK 和已签名 APK 重新签名。</div>}
+      </Panel>
+
+      <Panel icon={<KeyRound size={18} />} title="签名信息">
+        <SigningProfileList
+          profiles={signingProfiles}
+          selectedId={selectedSigningProfileId}
+          disabled={busy}
+          onSelect={onSelectSigningProfile}
+          onEdit={onEditSigningProfile}
+          onDelete={onDeleteSigningProfile}
+        />
+        <button className="secondary full" disabled={busy} onClick={onAddSigningProfile}>
+          <Plus size={16} />
+          新增签名
+        </button>
+        {!selectedSigningProfileId && <div className="inline-hint">请选择一个签名信息。</div>}
+      </Panel>
+
+      <Panel icon={<FolderOpen size={18} />} title="签名输出目录">
+        <div className="path-row solo">
+          <input value={outputDir} disabled={busy} onChange={(event) => onOutputDirChange(event.target.value)} placeholder="签名 APK 输出目录" />
+          <button className="icon-button" disabled={busy} onClick={onSelectOutputDir} title="选择输出目录">
+            <FolderOpen size={18} />
+          </button>
+        </div>
+      </Panel>
+
+      <Panel icon={<Loader2 size={18} />} title="任务">
+        <div className="action-row">
+          <button className="primary" onClick={onSign} disabled={!canStart}>
+            {busy ? <Loader2 size={17} className="spin" /> : <Play size={17} />}
+            {busy ? "正在签名" : "签名 APK"}
+          </button>
+          {result && <span className="job-state succeeded">签名成功</span>}
+        </div>
+        {result && (
+          <div className="job-view">
+            <div className="result-actions">
+              <button className="secondary" onClick={() => onOpenOutput(result.outputDir)}>
+                <FolderOpen size={16} />
+                打开目录
+              </button>
+              <button className="secondary" onClick={() => onCopyPath(result.outputPath)}>
+                <Copy size={16} />
+                复制路径
+              </button>
+            </div>
+            <div className="result-path">
+              <strong>签名 APK</strong>
+              <code>{result.outputPath}</code>
             </div>
           </div>
         )}

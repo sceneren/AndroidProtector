@@ -11,3 +11,45 @@ src-tauri/gen/
 *.keystore
 *.jks
 *.p12
+
+# Local settings, credentials, and signing material
+.env
+.env.*
+!.env.example
+*.local
+*.local.*
+local.properties
+key.properties
+keystore.properties
+signing.properties
+credentials.json
+secrets.json
+.git-credentials
+.netrc
+.npmrc
+.pypirc
+.cargo/credentials*
+*.pfx
+*.pem
+*.key
+*.pk8
+*.p8
+*.jks.*
+*.keystore.*
+*.kdbx
+.aws/
+.ssh/
+
+# Android caches and generated build files
+.gradle/
+.cxx/
+build/
+*.apk
+*.aab
+*.apks
+*.idsig
+
+# Local AI diagnostics
+.codex/references/_diff.json
+.codex/edit-tracker.log
+.codex/review-needed.flag

@@ -1,5 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ChannelPackagingMethod {
+    #[default]
+    Existing,
+    VasDolly,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ArtifactKind {
@@ -173,6 +181,13 @@ pub struct SigningConfig {
     pub store_type: Option<String>,
     #[serde(default)]
     pub signing_scheme: SigningScheme,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApkSigningResult {
+    pub output_dir: String,
+    pub output_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

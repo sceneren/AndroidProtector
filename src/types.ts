@@ -82,6 +82,8 @@ export interface ProtectionOptions {
   legacyApiFallback: boolean;
 }
 
+export type ChannelPackagingMethod = "existing" | "vasDolly";
+
 export interface ChannelOptions {
   enabled: boolean;
   channels: string[];
@@ -107,6 +109,11 @@ export interface SigningConfig {
   alias: string;
   storeType?: string | null;
   signingScheme: SigningScheme;
+}
+
+export interface ApkSigningResult {
+  outputDir: string;
+  outputPath: string;
 }
 
 export interface SigningProfile {

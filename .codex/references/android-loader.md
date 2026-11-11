@@ -12,7 +12,7 @@
 | 路径 | `loader-android/protector-loader/` |
 | namespace | `com.protector.runtime` |
 | compileSdk / minSdk | 35 / 23 |
-| ABI | `arm64-v8a`, `armeabi-v7a`, `x86_64` |
+| ABI | `arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86` |
 | 源文件数 | 3 |
 
 ## 目录结构
@@ -39,7 +39,7 @@ loader-android/protector-loader/
 
 ### `ProtectorRuntime`
 
-- `init(Context)` 加载 `protector_vm`，调用 `nativeInit(packageName, sourceDir, sdkInt)`，并用 `initialized` 防重复。
+- `init(Context)` 优先通过 `System.loadLibrary("protector_vm")` 加载 native library；失败时按设备 ABI 从当前 APK/split APK 抽取 `libprotector_vm.so` 到应用私有 `codeCacheDir` 后用绝对路径加载，然后调用 `nativeInit(packageName, sourceDir, sdkInt)`，并用 `initialized` 防重复。
 - `createOriginalApplication(Context)` 从 metadata key `protector.original_application` 读取原始 Application 类名。
 - `callAttachBaseContext(Application, Context)` 通过反射调用 Application.attach。
 - `invokeVm(int, Object, Object[])` 转发到 `nativeInvoke`。
@@ -57,10 +57,13 @@ loader-android/protector-loader/
 - 模块：`:protector-loader`
 - CMake：`src/main/cpp/CMakeLists.txt`
 - C++ 标准：C++20
+- NDK：固定 `27.2.12479018`
+- STL：`c++_static`，`libprotector_vm.so` 不应依赖或要求额外注入 `libc++_shared.so`
 
 ## 约定与风险
 
 - Java native 方法签名和 C++ 函数名必须同步：`nativeInit`、`nativeInvoke`。
 - `System.loadLibrary("protector_vm")` 与 CMake target `protector_vm` 不能漂移。
+- 重新构建 native loader 后必须用 `llvm-readelf -d libprotector_vm.so` 检查 `NEEDED` 列表，不能出现 `libc++_shared.so`。
 - 真实 payload 解密、class loading、signature tamper check 和 VM interpreter 尚未完成。
 - manifest 注入时必须把目标原 Application 写入 `protector.original_application` metadata。

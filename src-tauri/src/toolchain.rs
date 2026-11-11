@@ -87,6 +87,22 @@ pub fn command_path(status: &ToolStatus) -> Option<String> {
     status.path.clone().filter(|_| status.available)
 }
 
+pub fn resolve_vasdolly_jar(scratch: &Path) -> Result<PathBuf, String> {
+    for root in bundled_toolchain_roots() {
+        let candidate = root.join("vasdolly").join("VasDolly.jar");
+        if candidate.is_file() {
+            return candidate
+                .canonicalize()
+                .map_err(|err| format!("[vasdolly] {err}"));
+        }
+    }
+    // Also works when the installed app is launched outside the resource directory.
+    let jar = scratch.join("VasDolly.jar");
+    std::fs::write(&jar, include_bytes!("../../tools/vasdolly/VasDolly.jar"))
+        .map_err(|err| format!("[vasdolly] failed to prepare bundled tool: {err}"))?;
+    Ok(jar)
+}
+
 fn select_build_tools(
     paths: Option<&ToolchainPaths>,
     build_tools: &[BuildToolInfo],

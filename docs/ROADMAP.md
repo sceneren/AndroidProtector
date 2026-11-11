@@ -22,7 +22,7 @@
 - Android loader 源码骨架，运行时可从 `assets/protector/protection-manifest.json` 读取原始 Application 名称作为 fallback。
 - CI 工作流：`pnpm build`、`cargo test`、`cargo check --release`。
 
-当前版本仍不是完整生产级加固器。核心缺口集中在运行时解密加载、完整 binary manifest meta-data 写入、真实 DEX 重写、完整 VMP 执行链和 emulator 验收。
+当前版本仍不是完整生产级加固器。核心缺口集中在完整 binary manifest meta-data 写入、复杂 APK/AAB 兼容性、完整 VMP 执行链和 emulator 验收。
 
 ## 最近已完成
 
@@ -51,6 +51,8 @@
 - 修复 DEX 加密包启动问题：loader 内置 AndroidX `CoreComponentFactory` 兼容类，DexClassLoader native 搜索路径补充 APK 内 `lib/<abi>`，运行时 dex 写入后设为只读。
 - DEX payload JSON 移除明文 `keyB64`，改为 native loader 派生密钥解包 `wrappedKeyB64`；payload key 不再直接写入 assets metadata，Java loader 不保留 wrapping key 静态种子。
 - native loader 补齐 `arm64-v8a`、`armeabi-v7a`、`x86_64`、`x86` 四个 ABI，并作为内置资源随桌面程序提供；当输入包已有业务 native libs 时，仅注入与业务 ABI 一致的壳库 ABI，避免额外 ABI 影响系统选择。
+- 修复部分 APK 加固后因 `System.loadLibrary("protector_vm")` 启动早期失败导致的 DEX 解密崩溃：loader 会按设备 ABI 从 APK/split APK 抽取 `libprotector_vm.so` 到应用私有目录后使用绝对路径加载，并保留原始 native 加载错误。
+- 修复 native loader 依赖缺失导致的启动崩溃：`libprotector_vm.so` 改为使用静态 C++ STL 构建，四个 ABI 的 `NEEDED` 列表不再包含 `libc++_shared.so`。
 
 ## 优先级最高的工作
 
@@ -91,13 +93,18 @@
 
 ### 3. 完成真实 DEX 加密与运行时加载
 
+已完成：
+
+- 将原始 `classes*.dex` 从明文 dex 列表中移除，改为 loader dex + 加密 payload。
+- loader 在 `attachBaseContext` 阶段读取并解密 `assets/protector/dex-payload.json`。
+- 使用应用私有 `codeCacheDir` 写入只读运行时 dex，并通过 `DexClassLoader` 安装业务 dex。
+- 恢复原始 Application 生命周期：`attachBaseContext/onCreate`。
+- native library 优先走系统加载，失败时按 ABI 从 APK/split APK 抽取后加载。
+
 待完成：
 
-- 将原始 `classes*.dex` 从明文 dex 列表中移除或替换为受控 stub/loader dex。
-- loader 在 `attachBaseContext` 阶段读取并解密 `assets/protector/dex-payload.json`。
 - API 26+ 优先使用内存加载。
-- API 23-25 使用受控临时文件 fallback。
-- 恢复原始 Application 生命周期：`attachBaseContext/onCreate`。
+- 增加更多真实 APK 回归，覆盖 `extractNativeLibs=false`、split APK、不同 ABI 组合和 Android 版本差异。
 - 验收：样例 app 加固后可正常启动，业务类可加载。
 
 ### 4. 完成 VMP v1 真实方法改写
@@ -134,7 +141,7 @@
 
 - 已完成 loader dex/so 注入边界。
 - 已完成 manifest Application 替换初版。
-- 待完成运行时 DEX 解密加载。
+- 已完成基础运行时 DEX 解密加载。
 - 待完成真实样例 APK 安装启动验证。
 
 验收标准：

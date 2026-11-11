@@ -17,6 +17,8 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -27,8 +29,11 @@ public final class ProtectorRuntime {
     private static final String ORIGINAL_APPLICATION_KEY = "protector.original_application";
     private static final String PROTECTION_MANIFEST = "protector/protection-manifest.json";
     private static final String DEX_PAYLOAD_METADATA = "protector/dex-payload.json";
+    private static final String NATIVE_LIBRARY_NAME = "protector_vm";
+    private static final String NATIVE_LIBRARY_FILE = "libprotector_vm.so";
     private static volatile boolean initialized;
     private static volatile boolean nativeReady;
+    private static volatile UnsatisfiedLinkError nativeLoadError;
     private static volatile ClassLoader payloadClassLoader;
 
     private ProtectorRuntime() {}
@@ -37,12 +42,14 @@ public final class ProtectorRuntime {
         if (initialized) {
             return;
         }
-        try {
-            System.loadLibrary("protector_vm");
-            nativeReady = true;
-            nativeInit(context.getPackageName(), context.getApplicationInfo().sourceDir, Build.VERSION.SDK_INT);
-        } catch (UnsatisfiedLinkError error) {
-            nativeReady = false;
+        nativeReady = loadProtectorLibrary(context);
+        if (nativeReady) {
+            try {
+                nativeInit(context.getPackageName(), context.getApplicationInfo().sourceDir, Build.VERSION.SDK_INT);
+            } catch (UnsatisfiedLinkError error) {
+                nativeReady = false;
+                addNativeLoadFailure(error);
+            }
         }
         installEncryptedDexPayload(context);
         initialized = true;
@@ -188,13 +195,148 @@ public final class ProtectorRuntime {
 
     private static byte[] deriveWrapKey(String packageName, byte[] salt) {
         if (!nativeReady) {
-            throw new IllegalStateException("Protector native key derivation is unavailable");
+            throw new IllegalStateException("Protector native key derivation is unavailable", nativeLoadError);
         }
         byte[] key = nativeDeriveWrapKey(packageName, salt);
         if (key == null || key.length != 32) {
             throw new IllegalStateException("Protector native key derivation returned invalid key");
         }
         return key;
+    }
+
+    private static boolean loadProtectorLibrary(Context context) {
+        try {
+            System.loadLibrary(NATIVE_LIBRARY_NAME);
+            nativeLoadError = null;
+            return true;
+        } catch (UnsatisfiedLinkError error) {
+            nativeLoadError = error;
+        }
+
+        File extracted = extractBundledNativeLibrary(context);
+        if (extracted == null) {
+            return false;
+        }
+        try {
+            System.load(extracted.getAbsolutePath());
+            nativeLoadError = null;
+            return true;
+        } catch (UnsatisfiedLinkError error) {
+            addNativeLoadFailure(error);
+            return false;
+        }
+    }
+
+    private static File extractBundledNativeLibrary(Context context) {
+        ApplicationInfo info = context.getApplicationInfo();
+        String[] apkPaths = apkSearchPaths(info);
+        String[] abis = supportedAbis();
+        StringBuilder failures = new StringBuilder();
+        for (String apkPath : apkPaths) {
+            if (apkPath == null || apkPath.isEmpty()) {
+                continue;
+            }
+            try (ZipFile zip = new ZipFile(apkPath)) {
+                for (String abi : abis) {
+                    String entryName = "lib/" + abi + "/" + NATIVE_LIBRARY_FILE;
+                    ZipEntry entry = zip.getEntry(entryName);
+                    if (entry == null || entry.isDirectory()) {
+                        continue;
+                    }
+                    File output = extractedNativeLibraryFile(context, abi);
+                    try (InputStream input = zip.getInputStream(entry)) {
+                        writeStream(output, input);
+                    }
+                    if (!output.setReadOnly()) {
+                        throw new IOException("Failed to mark native library read-only: " + output);
+                    }
+                    return output;
+                }
+            } catch (IOException error) {
+                if (failures.length() > 0) {
+                    failures.append("; ");
+                }
+                failures.append(apkPath).append(": ").append(error.getMessage());
+            }
+        }
+
+        UnsatisfiedLinkError error = new UnsatisfiedLinkError(
+                "Bundled " + NATIVE_LIBRARY_FILE
+                        + " not found for ABIs [" + joinValues(abis) + "]"
+                        + " in APK paths [" + joinValues(apkPaths) + "]"
+                        + (failures.length() == 0 ? "" : " (" + failures + ")"));
+        addNativeLoadFailure(error);
+        return null;
+    }
+
+    private static File extractedNativeLibraryFile(Context context, String abi) throws IOException {
+        File dir = new File(new File(context.getCodeCacheDir(), "protector/native"), abi);
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw new IOException("Failed to create native library directory: " + dir);
+        }
+        return new File(dir, NATIVE_LIBRARY_FILE);
+    }
+
+    private static void writeStream(File file, InputStream input) throws IOException {
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IOException("Failed to create directory: " + parent);
+        }
+        if (file.exists() && !file.setWritable(true)) {
+            throw new IOException("Failed to make existing file writable: " + file);
+        }
+        try (FileOutputStream output = new FileOutputStream(file, false)) {
+            byte[] buffer = new byte[8192];
+            while (true) {
+                int read = input.read(buffer);
+                if (read < 0) {
+                    break;
+                }
+                output.write(buffer, 0, read);
+            }
+        }
+    }
+
+    private static String[] apkSearchPaths(ApplicationInfo info) {
+        int splitCount = info.splitSourceDirs == null ? 0 : info.splitSourceDirs.length;
+        String[] paths = new String[splitCount + 1];
+        paths[0] = info.sourceDir;
+        for (int i = 0; i < splitCount; i++) {
+            paths[i + 1] = info.splitSourceDirs[i];
+        }
+        return paths;
+    }
+
+    private static String[] supportedAbis() {
+        if (Build.SUPPORTED_ABIS != null && Build.SUPPORTED_ABIS.length > 0) {
+            return Build.SUPPORTED_ABIS;
+        }
+        return new String[] {Build.CPU_ABI, Build.CPU_ABI2};
+    }
+
+    private static String joinValues(String[] values) {
+        if (values == null || values.length == 0) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (String value : values) {
+            if (value == null || value.isEmpty()) {
+                continue;
+            }
+            if (builder.length() > 0) {
+                builder.append(", ");
+            }
+            builder.append(value);
+        }
+        return builder.toString();
+    }
+
+    private static void addNativeLoadFailure(UnsatisfiedLinkError error) {
+        UnsatisfiedLinkError previous = nativeLoadError;
+        if (previous != null && previous != error) {
+            error.addSuppressed(previous);
+        }
+        nativeLoadError = error;
     }
 
     private static String sha256B64(byte[] bytes) {

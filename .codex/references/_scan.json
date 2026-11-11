@@ -1,10 +1,10 @@
 {
-  "project_root": "C:\\Users\\Administrator\\Documents\\Android加固工具",
+  "project_root": ".",
   "project_type": {
     "platform": "Node",
     "build": "npm/yarn"
   },
-  "scan_time": "2026-06-30 09:44:27",
+  "scan_time": "2026-11-11 10:52:24",
   "module_count": 3,
   "modules": [
     {
@@ -183,44 +183,52 @@
       "source_dirs": [
         {
           "root": "src-tauri\\src",
-          "file_count": 13,
+          "file_count": 17,
           "file_list": [
+            "channel.rs",
             "commands.rs",
             "crypto.rs",
             "dex.rs",
             "jobs.rs",
             "lib.rs",
+            "loader.rs",
             "main.rs",
+            "manifest.rs",
             "models.rs",
             "protect.rs",
             "scan.rs",
             "settings.rs",
             "signing.rs",
             "toolchain.rs",
+            "vasdolly.rs",
             "vmp.rs"
           ],
           "top_packages": []
         }
       ],
-      "file_count": 13,
+      "file_count": 17,
       "file_list": [
+        "channel.rs",
         "commands.rs",
         "crypto.rs",
         "dex.rs",
         "jobs.rs",
         "lib.rs",
+        "loader.rs",
         "main.rs",
+        "manifest.rs",
         "models.rs",
         "protect.rs",
         "scan.rs",
         "settings.rs",
         "signing.rs",
         "toolchain.rs",
+        "vasdolly.rs",
         "vmp.rs"
       ],
       "resource_dirs": [],
       "asset_files": [],
-      "tree": "src-tauri\\src/\n├── commands.rs\n├── crypto.rs\n├── dex.rs\n├── jobs.rs\n├── lib.rs\n├── main.rs\n├── models.rs\n├── protect.rs\n├── scan.rs\n├── settings.rs\n├── signing.rs\n├── toolchain.rs\n└── vmp.rs",
+      "tree": "src-tauri\\src/\n├── channel.rs\n├── commands.rs\n├── crypto.rs\n├── dex.rs\n├── jobs.rs\n├── lib.rs\n├── loader.rs\n├── main.rs\n├── manifest.rs\n├── models.rs\n├── protect.rs\n├── scan.rs\n├── settings.rs\n├── signing.rs\n├── toolchain.rs\n├── vasdolly.rs\n└── vmp.rs",
       "dependencies": [
         {
           "name": "tauri-build",
@@ -430,12 +438,14 @@
       "source_dirs": [
         {
           "root": "loader-android\\protector-loader\\src\\main\\java",
-          "file_count": 2,
+          "file_count": 3,
           "file_list": [
+            "androidx\\core\\app\\CoreComponentFactory.java",
             "com\\protector\\runtime\\ProtectorApplication.java",
             "com\\protector\\runtime\\ProtectorRuntime.java"
           ],
           "top_packages": [
+            "androidx.core.app",
             "com.protector.runtime"
           ]
         },
@@ -448,15 +458,16 @@
           "top_packages": []
         }
       ],
-      "file_count": 3,
+      "file_count": 4,
       "file_list": [
+        "androidx\\core\\app\\CoreComponentFactory.java",
         "com\\protector\\runtime\\ProtectorApplication.java",
         "com\\protector\\runtime\\ProtectorRuntime.java",
         "protector_vm.cpp"
       ],
       "resource_dirs": [],
       "asset_files": [],
-      "tree": "loader-android\\protector-loader\\src\\main\\java/\n└── com/  (2个文件)\n    └── protector/  (2个文件)\n        └── runtime/  (2个文件)\n            ├── ProtectorApplication.java\n            └── ProtectorRuntime.java\nloader-android\\protector-loader\\src\\main\\cpp/\n└── protector_vm.cpp",
+      "tree": "loader-android\\protector-loader\\src\\main\\java/\n├── androidx/  (1个文件)\n│   └── core/  (1个文件)\n│       └── app/  (1个文件)\n│           └── CoreComponentFactory.java\n└── com/  (2个文件)\n    └── protector/  (2个文件)\n        └── runtime/  (2个文件)\n            ├── ProtectorApplication.java\n            └── ProtectorRuntime.java\nloader-android\\protector-loader\\src\\main\\cpp/\n└── protector_vm.cpp",
       "dependencies": [],
       "build_config": {
         "dependencies": [],

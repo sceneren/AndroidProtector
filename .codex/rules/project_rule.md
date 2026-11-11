@@ -30,6 +30,8 @@
 
 - APK/AAB 输入必须先通过 `scan::scan_artifact` 判断类型和边界，未知类型必须返回错误。
 - ZIP 重写必须移除旧签名条目，生成最终产物后重新签名并验证；不得保留原包签名。
+- 独立 `sign_apk` 只接受已扫描的 APK，复用签名 profile 与核心签名 helper；必须先对齐再签名、验证成功后发布 `.signed.apk`，不得覆盖输入或已有同名输出，不调用加固或渠道包流程。
+- 渠道包在已签名 APK 的扩展区写入渠道时不属于 ZIP 内容重写：当前方式使用自定义 Signing Block；VasDolly 通过 Java 适配器调用官方读写与校验 API 保留原签名，必须检查输入/输出签名和渠道回读。`package_channels.method` 缺省为 `existing`，另支持 `vasDolly`。
 - AndroidManifest 修改必须使用 binary AXML/AAB manifest 感知实现，禁止对 APK/AAB manifest 做普通字符串替换。
 - 外部工具调用必须使用 `std::process::Command` 的 `arg`/`env` 传参；禁止通过 shell 字符串拼接执行用户路径或密码。
 - 签名密码当前为开发期弱混淆存储，新增真实用户功能时必须迁移到 Windows DPAPI/macOS Keychain 等系统安全存储。

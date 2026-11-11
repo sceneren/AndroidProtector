@@ -1,7 +1,8 @@
 use crate::jobs::{self, AppState, JobReporter};
 use crate::models::{
-    AppPreferences, ArtifactInfo, JobStatus, ProtectRequest, SigningAliasInspection, SigningConfig,
-    SigningProfileInput, SigningValidation, ToolchainPaths, ToolchainStatus, VmpPlan,
+    ApkSigningResult, AppPreferences, ArtifactInfo, JobStatus, ProtectRequest,
+    SigningAliasInspection, SigningConfig, SigningProfileInput, SigningValidation, ToolchainPaths,
+    ToolchainStatus, VmpPlan,
 };
 use crate::{channel, protect, scan, settings, signing, toolchain, vmp};
 use std::fs;
@@ -112,12 +113,123 @@ pub fn cancel_job(state: State<AppState>, job_id: String) -> Result<bool, String
 }
 
 #[tauri::command]
-pub fn package_channels(
+pub async fn sign_apk(
+    input_path: String,
+    output_dir: String,
+    signing_profile_id: String,
+    toolchain_paths: Option<ToolchainPaths>,
+) -> Result<ApkSigningResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        sign_apk_impl(input_path, output_dir, signing_profile_id, toolchain_paths)
+    })
+    .await
+    .map_err(|err| format!("[sign] APK signing task failed: {err}"))?
+}
+
+fn sign_apk_impl(
+    input_path: String,
+    output_dir: String,
+    signing_profile_id: String,
+    toolchain_paths: Option<ToolchainPaths>,
+) -> Result<ApkSigningResult, String> {
+    let input = Path::new(input_path.trim());
+    let output_dir = Path::new(output_dir.trim());
+    if input.as_os_str().is_empty() {
+        return Err("[scan] 请选择需要签名的 APK。".to_string());
+    }
+    if output_dir.as_os_str().is_empty() {
+        return Err("[output] 请选择签名输出目录。".to_string());
+    }
+    if signing_profile_id.trim().is_empty() {
+        return Err("[sign] 请选择签名信息。".to_string());
+    }
+    let artifact = scan::scan_artifact(input).map_err(|err| format!("[scan] {err}"))?;
+    if artifact.kind != crate::models::ArtifactKind::Apk {
+        return Err("[scan] 签名apk 只支持 APK 文件。".to_string());
+    }
+    let signing = settings::signing_config_for_profile(signing_profile_id.trim())?
+        .ok_or_else(|| "[sign] 签名信息不存在，请重新选择。".to_string())?;
+    sign_apk_to_dir(input, output_dir, &signing, toolchain_paths.as_ref())
+}
+
+fn sign_apk_to_dir(
+    input: &Path,
+    output_dir: &Path,
+    signing: &SigningConfig,
+    toolchain_paths: Option<&ToolchainPaths>,
+) -> Result<ApkSigningResult, String> {
+    let stem = input
+        .file_stem()
+        .ok_or_else(|| "[output] invalid APK filename".to_string())?
+        .to_string_lossy();
+    let output_path = output_dir.join(format!("{stem}.signed.apk"));
+    if output_path.exists() {
+        return Err(format!(
+            "[output] 输出文件已存在，请选择其他目录：{}",
+            output_path.display()
+        ));
+    }
+    let detected = toolchain::detect_toolchain(toolchain_paths);
+    let zipalign = toolchain::command_path(&detected.zipalign).ok_or_else(|| {
+        "[toolchain] 未找到 zipalign，请配置 Android SDK build-tools。".to_string()
+    })?;
+    let apksigner = toolchain::command_path(&detected.apksigner).ok_or_else(|| {
+        "[toolchain] 未找到 apksigner，请配置 Android SDK build-tools。".to_string()
+    })?;
+    fs::create_dir_all(output_dir).map_err(|err| format!("[output] {err}"))?;
+    let scratch = tempfile::tempdir_in(output_dir).map_err(|err| format!("[sign] {err}"))?;
+    let aligned = scratch.path().join("aligned.apk");
+    let signed = scratch.path().join("signed.apk");
+
+    let mut align = toolchain::command_for_tool(&zipalign);
+    align.args(["-f", "-p", "4"]).arg(input).arg(&aligned);
+    run_simple_command("zipalign", &mut align)?;
+    protect::sign_apk_with_apksigner(&apksigner, &aligned, &signed, signing)?;
+    let mut verify = toolchain::command_for_tool(&apksigner);
+    verify.args(["verify", "--verbose"]).arg(&signed);
+    run_simple_command("verify", &mut verify)?;
+
+    // Publish only verified output, without replacing a file created during signing.
+    tempfile::TempPath::try_from_path(signed)
+        .map_err(|err| format!("[output] {err}"))?
+        .persist_noclobber(&output_path)
+        .map_err(|err| format!("[output] publish signed APK: {err}"))?;
+    Ok(ApkSigningResult {
+        output_dir: output_dir.display().to_string(),
+        output_path: output_path.display().to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn package_channels(
     input_path: String,
     output_dir: String,
     channels: Vec<String>,
     signing_profile_id: Option<String>,
     toolchain_paths: Option<ToolchainPaths>,
+    method: Option<crate::models::ChannelPackagingMethod>,
+) -> Result<channel::ChannelPackageResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        package_channels_impl(
+            input_path,
+            output_dir,
+            channels,
+            signing_profile_id,
+            toolchain_paths,
+            method.unwrap_or_default(),
+        )
+    })
+    .await
+    .map_err(|err| format!("channel packaging task failed: {err}"))?
+}
+
+fn package_channels_impl(
+    input_path: String,
+    output_dir: String,
+    channels: Vec<String>,
+    signing_profile_id: Option<String>,
+    toolchain_paths: Option<ToolchainPaths>,
+    method: crate::models::ChannelPackagingMethod,
 ) -> Result<channel::ChannelPackageResult, String> {
     let input = Path::new(input_path.trim());
     let output_dir = Path::new(output_dir.trim());
@@ -127,28 +239,59 @@ pub fn package_channels(
     if output_dir.as_os_str().is_empty() {
         return Err("channel output directory is required".to_string());
     }
+    if scan::scan_artifact(input)?.kind != crate::models::ArtifactKind::Apk {
+        return Err("multi-channel packaging only supports APK files".to_string());
+    }
+    let channels = channel::validate_channels(&channels)?;
     let signing_profile_id = signing_profile_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
     if let Some(profile_id) = signing_profile_id {
+        let signing = settings::signing_config_for_profile(profile_id)?
+            .ok_or_else(|| format!("signing profile not found: {profile_id}"))?;
         return sign_apk_then_package_channels(
             input,
             output_dir,
             &channels,
-            profile_id,
+            &signing,
             toolchain_paths,
+            method,
         );
     }
-    channel::write_channel_packages_to_dir(input, output_dir, &channels)
+    package_signed_channels(
+        input,
+        output_dir,
+        &channels,
+        method,
+        toolchain_paths.as_ref(),
+    )
+}
+
+fn package_signed_channels(
+    input: &Path,
+    output_dir: &Path,
+    channels: &[String],
+    method: crate::models::ChannelPackagingMethod,
+    toolchain_paths: Option<&ToolchainPaths>,
+) -> Result<channel::ChannelPackageResult, String> {
+    match method {
+        crate::models::ChannelPackagingMethod::Existing => {
+            channel::write_channel_packages_to_dir(input, output_dir, channels)
+        }
+        crate::models::ChannelPackagingMethod::VasDolly => {
+            crate::vasdolly::write_channel_packages(input, output_dir, channels, toolchain_paths)
+        }
+    }
 }
 
 fn sign_apk_then_package_channels(
     input: &Path,
     output_dir: &Path,
     channels: &[String],
-    signing_profile_id: &str,
+    signing: &SigningConfig,
     toolchain_paths: Option<ToolchainPaths>,
+    method: crate::models::ChannelPackagingMethod,
 ) -> Result<channel::ChannelPackageResult, String> {
     if input
         .extension()
@@ -158,8 +301,6 @@ fn sign_apk_then_package_channels(
     {
         return Err("multi-channel packaging only supports APK files".to_string());
     }
-    let signing = settings::signing_config_for_profile(signing_profile_id)?
-        .ok_or_else(|| format!("signing profile not found: {signing_profile_id}"))?;
     let detected = toolchain::detect_toolchain(toolchain_paths.as_ref());
     let zipalign = toolchain::command_path(&detected.zipalign)
         .ok_or_else(|| "zipalign is required before signing unsigned APK".to_string())?;
@@ -186,8 +327,14 @@ fn sign_apk_then_package_channels(
         .arg(input)
         .arg(&aligned);
     run_simple_command("zipalign", &mut zipalign_command)?;
-    protect::sign_apk_with_apksigner(&apksigner, &aligned, &signed, &signing)?;
-    channel::write_channel_packages_to_dir(&signed, output_dir, channels)
+    protect::sign_apk_with_apksigner(&apksigner, &aligned, &signed, signing)?;
+    package_signed_channels(
+        &signed,
+        output_dir,
+        channels,
+        method,
+        toolchain_paths.as_ref(),
+    )
 }
 
 fn run_simple_command(stage: &str, command: &mut Command) -> Result<(), String> {
@@ -350,6 +497,241 @@ fn format_job_log(status: &JobStatus) -> String {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn apk_signing_requires_input_output_and_profile() {
+        for (input, output, profile, expected) in [
+            (" ", "out", "profile", "[scan]"),
+            ("app.apk", " ", "profile", "[output]"),
+            ("app.apk", "out", " ", "[sign]"),
+        ] {
+            let error =
+                sign_apk_impl(input.into(), output.into(), profile.into(), None).unwrap_err();
+            assert!(error.starts_with(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn apk_signing_rejects_aab_before_loading_profile_or_writing_output() {
+        use std::io::Write;
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("app.aab");
+        let output = temp.path().join("output");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&input).unwrap());
+        zip.start_file(
+            "base/manifest/AndroidManifest.xml",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(b"<manifest package=\"com.example.test\" />")
+            .unwrap();
+        zip.finish().unwrap();
+
+        let error = sign_apk_impl(
+            input.display().to_string(),
+            output.display().to_string(),
+            "unused-profile".into(),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("只支持 APK"), "{error}");
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn apk_signing_preserves_existing_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("应用 & release.APK");
+        let output = temp.path().join("应用 & release.signed.apk");
+        fs::write(&output, b"existing signed APK").unwrap();
+        let error =
+            sign_apk_to_dir(&input, temp.path(), &SigningConfig::default(), None).unwrap_err();
+        assert!(error.contains("已存在"), "{error}");
+        assert_eq!(fs::read(output).unwrap(), b"existing signed APK");
+    }
+
+    #[test]
+    #[ignore = "requires JDK/SDK and APK_SIGNING_TEST_FIXTURES with APKs and fixture.jks"]
+    fn signs_real_apks_without_channel_packaging() {
+        use crate::models::SigningScheme;
+        use std::collections::BTreeMap;
+        use std::io::Read;
+
+        fn content_entries(path: &Path) -> BTreeMap<String, Vec<u8>> {
+            let mut zip = zip::ZipArchive::new(fs::File::open(path).unwrap()).unwrap();
+            let mut entries = BTreeMap::new();
+            for index in 0..zip.len() {
+                let mut entry = zip.by_index(index).unwrap();
+                if entry.is_dir() || scan::is_signature_entry(entry.name()) {
+                    continue;
+                }
+                let mut bytes = Vec::new();
+                entry.read_to_end(&mut bytes).unwrap();
+                entries.insert(entry.name().to_string(), bytes);
+            }
+            entries
+        }
+
+        let fixtures =
+            PathBuf::from(std::env::var("APK_SIGNING_TEST_FIXTURES").expect("fixture directory"));
+        let temp = tempfile::tempdir().unwrap();
+        let mut signing = SigningConfig {
+            keystore_path: fixtures.join("fixture.jks").display().to_string(),
+            store_password: "fixture-only".into(),
+            key_password: Some("fixture-only".into()),
+            alias: "fixture".into(),
+            ..SigningConfig::default()
+        };
+        let detected = toolchain::detect_toolchain(None);
+        let apksigner = toolchain::command_path(&detected.apksigner).unwrap();
+        for source in ["unsigned", "v1", "v2", "v3"] {
+            let original_input = fixtures.join(format!("{source}.apk"));
+            // Exercise Unicode, spaces, metacharacters and uppercase extensions.
+            let input = temp.path().join(format!("应用 & {source}.APK"));
+            fs::copy(original_input, &input).unwrap();
+            let original = fs::read(&input).unwrap();
+            for scheme in [
+                SigningScheme::V1V2,
+                SigningScheme::V2V3,
+                SigningScheme::V1V2V3,
+            ] {
+                signing.signing_scheme = scheme;
+                let output_dir = temp.path().join(format!("签名 & {source}-{scheme:?}"));
+                let result = sign_apk_to_dir(&input, &output_dir, &signing, None).unwrap();
+                let output = Path::new(&result.output_path);
+                assert_eq!(
+                    output.file_name().unwrap(),
+                    format!("应用 & {source}.signed.apk").as_str()
+                );
+                assert_eq!(Path::new(&result.output_dir), output_dir);
+                assert_eq!(content_entries(&input), content_entries(output));
+                assert_eq!(fs::read(&input).unwrap(), original);
+                assert_eq!(fs::read_dir(&output_dir).unwrap().count(), 1);
+                let expects_v1 = scheme != SigningScheme::V2V3;
+                let expects_v3 = scheme != SigningScheme::V1V2;
+                let mut verify = toolchain::command_for_tool(&apksigner);
+                // Force verification on a platform that needs V1 when requested;
+                // the fixture's minSdk 28 otherwise allows the verifier to skip it.
+                verify
+                    .args([
+                        "verify",
+                        "--verbose",
+                        "--min-sdk-version",
+                        if expects_v1 { "21" } else { "24" },
+                    ])
+                    .arg(output);
+                let verification = verify.output().unwrap();
+                assert!(verification.status.success(), "{verification:?}");
+                let text = String::from_utf8_lossy(&verification.stdout);
+                assert!(text.contains("Verified using v2 scheme (APK Signature Scheme v2): true"));
+                assert!(
+                    text.contains(&format!(
+                        "Verified using v1 scheme (JAR signing): {expects_v1}"
+                    )),
+                    "{text}"
+                );
+                assert!(
+                    text.contains(&format!(
+                        "Verified using v3 scheme (APK Signature Scheme v3): {expects_v3}"
+                    )),
+                    "{text}"
+                );
+            }
+        }
+        signing.key_password = Some("wrong-test-password".into());
+        let failed_dir = temp.path().join("failed");
+        assert!(
+            sign_apk_to_dir(&fixtures.join("unsigned.apk"), &failed_dir, &signing, None).is_err()
+        );
+        assert_eq!(fs::read_dir(failed_dir).unwrap().count(), 0);
+    }
+
+    #[test]
+    #[ignore = "requires Java and signed fixtures; run scripts/test-vasdolly.ps1"]
+    fn packages_real_apks_with_both_methods() {
+        use crate::models::ChannelPackagingMethod;
+        let fixtures =
+            PathBuf::from(std::env::var("VASDOLLY_TEST_FIXTURES").expect("fixture directory"));
+        let temp = tempfile::tempdir().unwrap();
+        for scheme in ["v1", "v2", "v3"] {
+            let input = fixtures.join(format!("{scheme}.apk"));
+            let original = fs::read(&input).unwrap();
+            let output = temp.path().join(format!("渠道 {scheme} & output"));
+            let result = package_channels_impl(
+                input.display().to_string(),
+                output.display().to_string(),
+                vec!["huawei".into(), "yyb".into()],
+                None,
+                None,
+                ChannelPackagingMethod::VasDolly,
+            )
+            .unwrap();
+            assert_eq!(result.packages.len(), 2);
+            assert_eq!(result.packages[0].value, "huawei");
+            assert!(Path::new(&result.packages[1].path).is_file());
+            assert_eq!(fs::read(&input).unwrap(), original);
+            let detected = toolchain::detect_toolchain(None);
+            let signer = toolchain::command_path(&detected.apksigner).unwrap();
+            for package in &result.packages {
+                let mut verify = toolchain::command_for_tool(&signer);
+                verify.arg("verify").arg(&package.path);
+                run_simple_command("verify", &mut verify).unwrap();
+            }
+            let existing = fs::read(&result.packages[0].path).unwrap();
+            assert!(package_channels_impl(
+                input.display().to_string(),
+                output.display().to_string(),
+                vec!["huawei".into()],
+                None,
+                None,
+                ChannelPackagingMethod::VasDolly,
+            )
+            .unwrap_err()
+            .contains("已存在"));
+            assert_eq!(fs::read(&result.packages[0].path).unwrap(), existing);
+        }
+        let legacy = package_channels_impl(
+            fixtures.join("v2.apk").display().to_string(),
+            temp.path().join("legacy").display().to_string(),
+            vec!["oppo".into()],
+            None,
+            None,
+            ChannelPackagingMethod::Existing,
+        )
+        .unwrap();
+        assert_eq!(
+            channel::read_sign_key_value(Path::new(&legacy.packages[0].path)).unwrap(),
+            "{\"chn\":\"oppo\"}"
+        );
+        let failed_output = temp.path().join("unsigned");
+        assert!(package_channels_impl(
+            fixtures.join("unsigned.apk").display().to_string(),
+            failed_output.display().to_string(),
+            vec!["huawei".into()],
+            None,
+            None,
+            ChannelPackagingMethod::VasDolly,
+        )
+        .is_err());
+        assert!(!failed_output.join("unsigned_huawei.apk").exists());
+        let signing = SigningConfig {
+            keystore_path: fixtures.join("fixture.jks").display().to_string(),
+            store_password: "fixture-only".into(),
+            key_password: Some("fixture-only".into()),
+            alias: "fixture".into(),
+            ..SigningConfig::default()
+        };
+        let presigned = sign_apk_then_package_channels(
+            &fixtures.join("unsigned.apk"),
+            &temp.path().join("presigned"),
+            &["vivo".into()],
+            &signing,
+            None,
+            ChannelPackagingMethod::VasDolly,
+        )
+        .unwrap();
+        assert_eq!(presigned.packages[0].value, "vivo");
+    }
 
     #[test]
     fn resolves_existing_output_directory() {

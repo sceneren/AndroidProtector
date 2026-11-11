@@ -820,7 +820,7 @@ def main():
                     sys.exit(1)
 
             new_scan = {
-                "project_root": str(PROJECT_ROOT),
+                "project_root": ".",
                 "project_type": project_type,
                 "scan_time": _current_time(),
                 "module_count": len(modules),
@@ -868,7 +868,7 @@ def main():
         modules = [m for m in modules if m["name"] in existing]
 
     scan_result = {
-        "project_root": str(PROJECT_ROOT),
+        "project_root": ".",
         "project_type": project_type,
         "scan_time": _current_time(),
         "module_count": len(modules),

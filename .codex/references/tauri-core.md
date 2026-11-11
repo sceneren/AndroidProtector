@@ -12,24 +12,28 @@
 | 路径 | `src-tauri/src/` |
 | crate | `android-protector-desktop` / `android_protector_desktop_lib` |
 | 主要依赖 | tauri, zip, aes-gcm, serde, serde_json, regex, sha2, uuid, tempfile |
-| 源文件数 | 13 |
+| 源文件数 | 17 |
 
 ## 目录结构
 
 ```text
 src-tauri/src/
+├── channel.rs
 ├── commands.rs
 ├── crypto.rs
 ├── dex.rs
 ├── jobs.rs
 ├── lib.rs
+├── loader.rs
 ├── main.rs
+├── manifest.rs
 ├── models.rs
 ├── protect.rs
 ├── scan.rs
 ├── settings.rs
 ├── signing.rs
 ├── toolchain.rs
+├── vasdolly.rs
 └── vmp.rs
 ```
 
@@ -47,6 +51,8 @@ src-tauri/src/
 | `protect.rs` | 加固主流水线、ZIP 重写、metadata 写入、签名和验证 |
 | `jobs.rs` | 后台任务状态、日志、进度和取消标志 |
 | `toolchain.rs` | Java、Android SDK、build-tools、zipalign、apksigner、bundletool 探测 |
+| `channel.rs` | 原有自定义 JSON 渠道 Signing Block 写入与回读 |
+| `vasdolly.rs` | Java 适配器调用官方 VasDolly API、输入/输出签名校验、渠道回读、临时文件发布 |
 | `signing.rs` | keytool alias 读取和签名配置校验 |
 | `settings.rs` | 签名 profile、输出目录和 selected profile 持久化 |
 
@@ -67,6 +73,16 @@ src-tauri/src/
 | `protect_artifact` | 创建后台任务并返回 job id |
 | `get_job_status` | 返回后台任务状态 |
 | `cancel_job` | 设置任务取消标志 |
+| `sign_apk` | 异步线程扫描 APK、解析已保存 profile、对齐、签名、验证并发布单个 APK；返回 `ApkSigningResult` |
+| `package_channels` | 异步线程执行 APK 扫描、可选预签名，再按 `method` 分流；缺省 `existing`，另支持 `vasDolly` |
+
+`models.rs::ChannelPackagingMethod` 与 TypeScript 同步。VasDolly 调用 Java 独立参数，不使用 shell；在输出目录的临时子目录中打包，要求官方 API 输入/输出签名验证成功、渠道回读匹配后才发布，拒绝覆盖已有同名产物。适配器修正官方 CLI 的 V1 空渠道误判和失败退出码问题，退出码 0 不能单独证明成功。官方 JAR 和适配器随 tools 资源提供并内嵌兜底。加固后的自动渠道包仍使用原有方式。
+
+## 独立 APK 签名
+
+`commands.rs::sign_apk` 使用独立请求参数 `inputPath`、`outputDir`、`signingProfileId`、可选 `toolchainPaths`；`ApkSigningResult` 与 TypeScript 同步，包含 `outputDir` 和 `outputPath`。扫描只接受 APK，复用已保存签名 profile 和 `protect::sign_apk_with_apksigner`，密码继续由 Rust 通过子进程环境变量传入。
+
+在目标目录内创建临时目录执行 zipalign、签名和强制 apksigner verify，通过后以 no-clobber 方式发布 `原文件名.signed.apk`；失败清理临时产物、保留输入及已有输出，不运行加固或渠道包逻辑。
 
 ## 加固流水线
 

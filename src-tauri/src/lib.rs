@@ -11,6 +11,7 @@ mod scan;
 mod settings;
 mod signing;
 mod toolchain;
+mod vasdolly;
 mod vmp;
 
 pub fn run() {
@@ -32,6 +33,7 @@ pub fn run() {
             commands::protect_artifact,
             commands::get_job_status,
             commands::cancel_job,
+            commands::sign_apk,
             commands::package_channels,
             commands::open_output_dir,
             commands::save_job_log

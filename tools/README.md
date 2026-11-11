@@ -15,6 +15,10 @@ tools/
     bin/jarsigner
   bundletool/
     bundletool.jar
+  vasdolly/
+    VasDolly.jar
+    VasDollyBridge.jar
+    LICENSE
   loader/
     classes.dex
     lib/
@@ -26,9 +30,12 @@ tools/
 
 For development on this machine, the app also auto-detects `ANDROID_HOME`, `ANDROID_SDK_ROOT`, and `JAVA_HOME`.
 
+VasDolly is bundled for the channel packaging screen. The backend searches the toolchain roots for `vasdolly/VasDolly.jar`, then falls back to the embedded copy if external resources are absent. Java is resolved through the existing toolchain/JAVA_HOME settings. See `vasdolly/README.md` for upstream provenance and checksum.
+
 The Java loader dex is required because the protection pipeline patches `AndroidManifest.xml` to `com.protector.runtime.ProtectorApplication`.
 The desktop backend also embeds `tools/loader/classes.dex` at build time as a fallback, so release builds can still inject the Java loader when external resources are not next to the executable.
 Native loader libraries are provided for `arm64-v8a`, `armeabi-v7a`, `x86_64`, and `x86`.
+These native loader libraries are built with static C++ STL and must not require `libc++_shared.so`.
 The desktop backend also embeds these `libprotector_vm.so` files at build time. If the input APK/AAB already contains business native libraries, the protector only injects loader libraries for matching input ABIs; if the input has no native libraries, all built-in loader ABIs remain available.
 DEX payload metadata stores only a wrapped payload key and public nonce/salt values; the wrapping key is derived inside the native loader.
 

@@ -30,6 +30,8 @@ src/
 - 主 React 组件，集中管理输入路径、输出目录、VMP 配置、加固选项、签名 profile、工具链状态和任务状态。
 - 通过 `invoke` 调用后端命令：`detect_toolchain`、`scan_artifact`、`estimate_vmp`、`inspect_signing_aliases`、`save_signing_profile`、`protect_artifact`、`get_job_status` 等。
 - 使用 750ms interval 轮询后台任务，并在终态或卸载时清理 timer。
+- 渠道包页面通过 `ChannelPackagingMethod` 选择 `existing`（默认）或 `vasDolly`，将 `method` 和工具链配置传入 `package_channels`；切换方式清空旧结果，运行中禁用方式切换。VasDolly UI 提示目标应用需接入 helper。
+- 「签名apk」页面复用渠道包单列卡片、签名 profile 列表和弹窗，独立保存输入、输出、忙碌状态和结果；通过 `sign_apk` 仅执行 APK 签名。运行中禁用本页表单和签名管理，成功后展示产物路径并打开输出目录。
 - 签名 modal 在保存前要求 alias 来自 keytool 识别结果，并要求 key password。
 
 ### `types.ts`
@@ -54,6 +56,8 @@ src/
 | `protect_artifact` | 启动后台加固任务 | `protect.rs` + `jobs.rs` |
 | `get_job_status` | 轮询任务状态 | `jobs.rs` |
 | `cancel_job` | 设置取消标志 | `jobs.rs` |
+| `sign_apk` | 独立签名 APK，返回输出目录与文件路径 | `commands.rs` + `protect.rs` 签名 helper |
+| `package_channels` | 已签名 APK 打渠道，或先签名再按指定方法打渠道 | `commands.rs` + `channel.rs` / `vasdolly.rs` |
 
 ## 设计约定
 
